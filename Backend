@@ -1,9 +1,6 @@
-#Backend
-# app.py (Merged Version)
+# app.py (Updated Version)
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,7 +16,6 @@ from email.mime.text import MIMEText
 import logging
 from functools import wraps
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -32,7 +28,6 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'jwt-secret-key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-limiter = Limiter(app=app, key_func=get_remote_address)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # AWS S3 Setup
@@ -53,26 +48,23 @@ class User(db.Model):
     kra_pin = db.Column(db.String(20), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(20), nullable=False)
-    email_verified = db.Column(db.Boolean, default=False)
-    phone_verified = db.Column(db.Boolean, default=False)
-    profile_image_url = db.Column(db.String(200))  # Added for profile image
-    id_verified = db.Column(db.Boolean, default=False)  # Added for IPRS verification
+    profile_image_url = db.Column(db.String(200))
+    id_verified = db.Column(db.Boolean, default=False)
 
-class DriverProfile(db.Model):
+class Vehicle(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    license_number = db.Column(db.String(20), unique=True)
+    license_number = db.Column(db.String(20))
     vehicle_reg = db.Column(db.String(20), unique=True)
     vehicle_type = db.Column(db.String(50))
     tons = db.Column(db.Float)
     image_url = db.Column(db.String(200))
+    status = db.Column(db.String(20), default='available')
 
 class VehicleBooking(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    driver_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    category = db.Column(db.String(50))
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicle.id'))
     pickup = db.Column(db.String(100))
     destination = db.Column(db.String(100))
     budget = db.Column(db.Float)
@@ -148,19 +140,7 @@ class Apartment(db.Model):
     expiry = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')
 
-# Admin Decorator
-def admin_required(f):
-    @wraps(f)
-    @jwt_required()
-    def decorated(*args, **kwargs):
-        user_id = get_jwt_identity()
-        user = User.query.get(user_id)
-        if user.role != 'admin':
-            return jsonify({"error": "Admin access required"}), 403
-        return f(*args, **kwargs)
-    return decorated
-
-# Email Notification
+# Utility Functions
 def send_email(to_email, subject, body):
     try:
         msg = MIMEText(body)
@@ -174,11 +154,10 @@ def send_email(to_email, subject, body):
     except Exception as e:
         logger.error(f"Email Error: {str(e)}")
 
-# MPesa Integration
 def get_mpesa_access_token():
     try:
-        consumer_key = os.getenv('MPESA_CONSUMER_KEY')
-        consumer_secret = os.getenv('MPESA_CONSUMER_SECRET')
+        consumer_key = os.getenv('MPESA_CONSUMER_KEY', 'your_safaricom_consumer_key')
+        consumer_secret = os.getenv('MPESA_CONSUMER_SECRET', 'your_safaricom_consumer_secret')
         api_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
         headers = {"Authorization": "Basic " + base64.b64encode(f"{consumer_key}:{consumer_secret}".encode()).decode()}
         response = requests.get(api_url, headers=headers)
@@ -191,15 +170,15 @@ def initiate_stk_push(phone, amount, transaction_desc):
     try:
         access_token = get_mpesa_access_token()
         timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-        password = base64.b64encode(f"{os.getenv('MPESA_SHORTCODE')}{os.getenv('MPESA_PASSKEY')}{timestamp}".encode()).decode()
+        password = base64.b64encode(f"{os.getenv('MPESA_SHORTCODE', '174379')}{os.getenv('MPESA_PASSKEY', 'your_passkey')}{timestamp}".encode()).decode()
         payload = {
-            "BusinessShortCode": os.getenv('MPESA_SHORTCODE'),
+            "BusinessShortCode": os.getenv('MPESA_SHORTCODE', '174379'),
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
             "Amount": amount,
             "PartyA": phone,
-            "PartyB": os.getenv('MPESA_SHORTCODE'),
+            "PartyB": os.getenv('MPESA_SHORTCODE', '174379'),
             "PhoneNumber": phone,
             "CallBackURL": "https://yourdomain.com/mpesa/callback",
             "AccountReference": "BebaApp",
@@ -212,23 +191,17 @@ def initiate_stk_push(phone, amount, transaction_desc):
         logger.error(f"MPesa STK Push Error: {str(e)}")
         raise
 
-# Simulated IPRS Integration (Mock API)
 def verify_with_iprs(id_number):
     try:
-        mock_response = {
-            "status": "success",
-            "id_number": id_number,
-            "full_name": "John Doe",
-            "verified": True
-        }
-        # Replace with real IPRS API call in production:
-        # headers = {"Authorization": f"Bearer {os.getenv('IPRS_API_KEY')}"}
-        # response = requests.get(f"https://iprs.go.ke/api/verify/{id_number}", headers=headers)
-        # data = response.json()
-        return mock_response['verified'] and mock_response['id_number'] == id_number
+        # Placeholder for real IPRS API (replace with actual endpoint and credentials)
+        api_key = os.getenv('IPRS_API_KEY', 'your_iprs_api_key')
+        headers = {"Authorization": f"Bearer {api_key}"}
+        response = requests.get(f"https://iprs.go.ke/api/verify/{id_number}", headers=headers)  # Replace with real URL
+        data = response.json()
+        return data.get('verified', False) and data.get('id_number') == id_number
     except Exception as e:
         logger.error(f"IPRS Verification Error: {str(e)}")
-        return False
+        return False  # Mock fallback for now
 
 def upload_to_s3(file, path):
     filename = f"{path}_{datetime.datetime.now().timestamp()}.jpg"
@@ -237,12 +210,10 @@ def upload_to_s3(file, path):
 
 # Routes
 @app.route('/signup', methods=['POST'])
-@limiter.limit("10 per minute")
 def signup():
     try:
         data = request.json
-        role = data.get('role')
-        user_id = f"BA{data['id_number']}" if role == 'customer' else data['id_number']
+        user_id = f"BA{data['id_number']}"
         
         if User.query.filter_by(email=data['email']).first():
             return jsonify({"error": "Email already exists"}), 400
@@ -258,25 +229,12 @@ def signup():
             kra_pin=data['kra_pin'],
             email=data['email'],
             password=generate_password_hash(data['password']),
-            role=role,
             id_verified=True
         )
         db.session.add(user)
-        db.session.flush()
-        
-        if role == 'driver':
-            driver = DriverProfile(
-                user_id=user.id,
-                license_number=data['license_number'],
-                vehicle_reg=data['vehicle_reg'],
-                vehicle_type=data['vehicle_type'],
-                tons=data.get('tons')
-            )
-            db.session.add(driver)
-        
         db.session.commit()
         access_token = create_access_token(identity=user.id)
-        send_email(user.email, "Welcome to Beba", "Please verify your email and phone.")
+        send_email(user.email, "Welcome to Beba", "Your account is ready.")
         return jsonify({"message": "Signup successful", "access_token": access_token}), 201
     except SQLAlchemyError as e:
         db.session.rollback()
@@ -284,14 +242,13 @@ def signup():
         return jsonify({"error": "Database error occurred"}), 500
 
 @app.route('/login', methods=['POST'])
-@limiter.limit("10 per minute")
 def login():
     try:
         data = request.json
         user = User.query.filter_by(email=data['email']).first()
         if user and check_password_hash(user.password, data['password']):
             access_token = create_access_token(identity=user.id)
-            return jsonify({"message": "Login successful", "access_token": access_token, "role": user.role})
+            return jsonify({"message": "Login successful", "access_token": access_token})
         return jsonify({"error": "Invalid credentials"}), 401
     except Exception as e:
         logger.error(f"Login Error: {str(e)}")
@@ -303,66 +260,97 @@ def upload_profile_image():
     try:
         user_id = get_jwt_identity()
         user = User.query.get(user_id)
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-        
         file = request.files['image']
         if file:
             profile_image_url = upload_to_s3(file, f"profiles/{user_id}")
             user.profile_image_url = profile_image_url
             db.session.commit()
-            send_email(user.email, "Profile Image Updated", "Your profile image has been updated for verification.")
             return jsonify({"message": "Profile image uploaded", "url": profile_image_url})
         return jsonify({"error": "No file provided"}), 400
     except Exception as e:
         logger.error(f"Profile Image Upload Error: {str(e)}")
         return jsonify({"error": "Failed to upload profile image"}), 500
 
-@app.route('/upload_vehicle_image', methods=['POST'])
+# Vehicle Management
+@app.route('/vehicles', methods=['POST'])
 @jwt_required()
-def upload_vehicle_image():
+def add_vehicle():
     try:
-        current_user = get_jwt_identity()
-        driver = DriverProfile.query.filter_by(user_id=current_user).first()
-        if not driver:
-            return jsonify({"error": "Driver profile not found"}), 404
+        user_id = get_jwt_identity()
+        data = request.json
+        file = request.files.get('image')
+        image_url = upload_to_s3(file, f"vehicles/{user_id}") if file else None
         
-        file = request.files['image']
-        if file:
-            filename = f"vehicles/{driver.vehicle_reg}_{datetime.datetime.now().timestamp()}.jpg"
-            s3_client.upload_fileobj(file, BUCKET_NAME, filename)
-            driver.image_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{filename}"
-            db.session.commit()
-            return jsonify({"message": "Image uploaded successfully", "url": driver.image_url})
-        return jsonify({"error": "No file provided"}), 400
+        vehicle = Vehicle(
+            user_id=user_id,
+            license_number=data.get('license_number'),
+            vehicle_reg=data['vehicle_reg'],
+            vehicle_type=data['vehicle_type'],
+            tons=data.get('tons'),
+            image_url=image_url
+        )
+        db.session.add(vehicle)
+        db.session.commit()
+        return jsonify({"message": "Vehicle added", "vehicle_id": vehicle.id})
     except Exception as e:
-        logger.error(f"Upload Error: {str(e)}")
-        return jsonify({"error": "Failed to upload image"}), 500
+        db.session.rollback()
+        logger.error(f"Vehicle Add Error: {str(e)}")
+        return jsonify({"error": "Failed to add vehicle"}), 500
 
-@app.route('/book_vehicle/<category>', methods=['POST'])
+@app.route('/vehicles', methods=['GET'])
 @jwt_required()
-def book_vehicle(category):
+def get_user_vehicles():
+    try:
+        user_id = get_jwt_identity()
+        vehicles = Vehicle.query.filter_by(user_id=user_id).all()
+        return jsonify([{"id": v.id, "vehicle_reg": v.vehicle_reg, "vehicle_type": v.vehicle_type, "tons": v.tons, "image_url": v.image_url, "status": v.status} for v in vehicles])
+    except Exception as e:
+        logger.error(f"Vehicle Fetch Error: {str(e)}")
+        return jsonify({"error": "Failed to fetch vehicles"}), 500
+
+@app.route('/vehicles/<int:vehicle_id>', methods=['DELETE'])
+@jwt_required()
+def remove_vehicle(vehicle_id):
+    try:
+        user_id = get_jwt_identity()
+        vehicle = Vehicle.query.filter_by(id=vehicle_id, user_id=user_id).first()
+        if not vehicle:
+            return jsonify({"error": "Vehicle not found or not yours"}), 404
+        db.session.delete(vehicle)
+        db.session.commit()
+        return jsonify({"message": "Vehicle removed"})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Vehicle Remove Error: {str(e)}")
+        return jsonify({"error": "Failed to remove vehicle"}), 500
+
+@app.route('/book_vehicle/<int:vehicle_id>', methods=['POST'])
+@jwt_required()
+def book_vehicle(vehicle_id):
     try:
         data = request.json
-        commissions = {'lorries': 300, 'transit': 350, 'vans': 300, 'cars': 300, 'multipurpose': 500, 'tow': 300, 'water': 300}
-        commission = commissions.get(category.lower(), 300)
+        vehicle = Vehicle.query.get(vehicle_id)
+        if not vehicle or vehicle.status != 'available':
+            return jsonify({"error": "Vehicle unavailable"}), 400
         
+        commission = {'lorries': 300, 'transit': 350, 'vans': 300, 'cars': 300, 'multipurpose': 500, 'tow': 300, 'water': 300}.get(vehicle.vehicle_type.lower(), 300)
         booking = VehicleBooking(
             customer_id=get_jwt_identity(),
-            category=category,
+            vehicle_id=vehicle_id,
             pickup=data['pickup'],
             destination=data['destination'],
             budget=data['budget'],
             commission=commission
         )
+        vehicle.status = 'booked'
         db.session.add(booking)
         db.session.commit()
         
-        response = initiate_stk_push(data['phone'], commission, f"Beba {category} Commission")
+        response = initiate_stk_push(data['phone'], commission, f"Beba {vehicle.vehicle_type} Commission")
         booking.mpesa_code = response.get('CheckoutRequestID')
         db.session.commit()
         
-        socketio.emit('new_booking', {'booking_id': booking.id, 'category': category, 'pickup': data['pickup']})
+        socketio.emit('new_booking', {'booking_id': booking.id, 'vehicle_type': vehicle.vehicle_type, 'pickup': data['pickup']})
         send_email(User.query.get(booking.customer_id).email, "Booking Created", f"Booking ID: {booking.id}")
         return jsonify({"message": "Booking created", "booking_id": booking.id})
     except Exception as e:
@@ -370,54 +358,14 @@ def book_vehicle(category):
         logger.error(f"Booking Error: {str(e)}")
         return jsonify({"error": "Failed to create booking"}), 500
 
-@app.route('/update_tracking', methods=['POST'])
-@jwt_required()
-def update_tracking():
-    try:
-        data = request.json
-        booking = VehicleBooking.query.get(data['booking_id'])
-        if booking.driver_id != get_jwt_identity():
-            return jsonify({"error": "Unauthorized"}), 403
-        booking.tracking_lat = data['lat']
-        booking.tracking_lng = data['lng']
-        db.session.commit()
-        socketio.emit('tracking_update', {'booking_id': booking.id, 'lat': data['lat'], 'lng': data['lng']})
-        return jsonify({"message": "Tracking updated"})
-    except Exception as e:
-        logger.error(f"Tracking Error: {str(e)}")
-        return jsonify({"error": "Failed to update tracking"}), 500
-
-@app.route('/rate', methods=['POST'])
-@jwt_required()
-def rate():
-    try:
-        data = request.json
-        booking = VehicleBooking.query.get(data['booking_id'])
-        if booking.customer_id != get_jwt_identity() and booking.driver_id != get_jwt_identity():
-            return jsonify({"error": "Unauthorized"}), 403
-        
-        rating = Rating(
-            booking_id=data['booking_id'],
-            rater_id=get_jwt_identity(),
-            ratee_id=booking.driver_id if get_jwt_identity() == booking.customer_id else booking.customer_id,
-            rating=data['rating'],
-            comment=data.get('comment', '')
-        )
-        db.session.add(rating)
-        db.session.commit()
-        return jsonify({"message": "Rating submitted"})
-    except Exception as e:
-        logger.error(f"Rating Error: {str(e)}")
-        return jsonify({"error": "Failed to submit rating"}), 500
-
+# Insurance, Rental, Shamba, Apartment Management (Add/Remove)
 @app.route('/insurance', methods=['POST'])
 @jwt_required()
 def apply_insurance():
     try:
-        data = request.json
         user_id = get_jwt_identity()
+        data = request.json
         files = request.files
-        
         logbook_url = upload_to_s3(files['logbook'], f"insurance/{user_id}_logbook")
         id_photo_url = upload_to_s3(files['id_photo'], f"insurance/{user_id}_id")
         
@@ -441,12 +389,12 @@ def apply_insurance():
         logger.error(f"Insurance Error: {str(e)}")
         return jsonify({"error": "Failed to apply for insurance"}), 500
 
-@app.route('/rental', methods=['POST'])
+@app.route('/rentals', methods=['POST'])
 @jwt_required()
 def list_rental():
     try:
-        data = request.json
         user_id = get_jwt_identity()
+        data = request.json
         files = request.files.getlist('images')
         image_urls = [upload_to_s3(file, f"rentals/{user_id}_{i}") for i, file in enumerate(files)]
         
@@ -471,12 +419,28 @@ def list_rental():
         logger.error(f"Rental Error: {str(e)}")
         return jsonify({"error": "Failed to list rental"}), 500
 
+@app.route('/rentals/<int:rental_id>', methods=['DELETE'])
+@jwt_required()
+def remove_rental(rental_id):
+    try:
+        user_id = get_jwt_identity()
+        rental = Rental.query.filter_by(id=rental_id, user_id=user_id).first()
+        if not rental:
+            return jsonify({"error": "Rental not found or not yours"}), 404
+        db.session.delete(rental)
+        db.session.commit()
+        return jsonify({"message": "Rental removed"})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Rental Remove Error: {str(e)}")
+        return jsonify({"error": "Failed to remove rental"}), 500
+
 @app.route('/shamba', methods=['POST'])
 @jwt_required()
 def list_shamba():
     try:
-        data = request.json
         user_id = get_jwt_identity()
+        data = request.json
         files = request.files
         title_deed_url = upload_to_s3(files['title_deed'], f"shamba/{user_id}_title")
         image_urls = [upload_to_s3(file, f"shamba/{user_id}_{i}") for i, file in enumerate(files.getlist('images'))]
@@ -503,12 +467,28 @@ def list_shamba():
         logger.error(f"Shamba Error: {str(e)}")
         return jsonify({"error": "Failed to list shamba"}), 500
 
-@app.route('/apartment', methods=['POST'])
+@app.route('/shamba/<int:shamba_id>', methods=['DELETE'])
+@jwt_required()
+def remove_shamba(shamba_id):
+    try:
+        user_id = get_jwt_identity()
+        shamba = Shamba.query.filter_by(id=shamba_id, user_id=user_id).first()
+        if not shamba:
+            return jsonify({"error": "Shamba not found or not yours"}), 404
+        db.session.delete(shamba)
+        db.session.commit()
+        return jsonify({"message": "Shamba removed"})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Shamba Remove Error: {str(e)}")
+        return jsonify({"error": "Failed to remove shamba"}), 500
+
+@app.route('/apartments', methods=['POST'])
 @jwt_required()
 def list_apartment():
     try:
-        data = request.json
         user_id = get_jwt_identity()
+        data = request.json
         files = request.files.getlist('images')
         image_urls = [upload_to_s3(file, f"apartments/{user_id}_{i}") for i, file in enumerate(files)]
         
@@ -533,10 +513,29 @@ def list_apartment():
         logger.error(f"Apartment Error: {str(e)}")
         return jsonify({"error": "Failed to list apartment"}), 500
 
+@app.route('/apartments/<int:apartment_id>', methods=['DELETE'])
+@jwt_required()
+def remove_apartment(apartment_id):
+    try:
+        user_id = get_jwt_identity()
+        apartment = Apartment.query.filter_by(id=apartment_id, user_id=user_id).first()
+        if not apartment:
+            return jsonify({"error": "Apartment not found or not yours"}), 404
+        db.session.delete(apartment)
+        db.session.commit()
+        return jsonify({"message": "Apartment removed"})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Apartment Remove Error: {str(e)}")
+        return jsonify({"error": "Failed to remove apartment"}), 500
+
 @app.route('/listings/<type>', methods=['GET'])
 def get_listings(type):
     try:
-        if type == 'rentals':
+        if type == 'vehicles':
+            listings = Vehicle.query.filter_by(status='available').all()
+            return jsonify([{"id": v.id, "vehicle_reg": v.vehicle_reg, "vehicle_type": v.vehicle_type, "tons": v.tons, "image_url": v.image_url} for v in listings])
+        elif type == 'rentals':
             listings = Rental.query.filter_by(status='active').all()
             return jsonify([{"id": r.id, "location": r.location, "house_type": r.house_type, "price": r.price, "images": r.image_urls} for r in listings])
         elif type == 'shamba':
@@ -549,41 +548,6 @@ def get_listings(type):
     except Exception as e:
         logger.error(f"Listings Error: {str(e)}")
         return jsonify({"error": "Failed to fetch listings"}), 500
-
-@app.route('/admin/users', methods=['GET'])
-@admin_required
-def get_users():
-    try:
-        users = User.query.all()
-        return jsonify([{"id": u.id, "user_id": u.user_id, "role": u.role, "email": u.email, "id_verified": u.id_verified} for u in users])
-    except Exception as e:
-        logger.error(f"Admin Users Error: {str(e)}")
-        return jsonify({"error": "Failed to fetch users"}), 500
-
-@app.route('/admin/bookings', methods=['GET'])
-@admin_required
-def get_bookings():
-    try:
-        bookings = VehicleBooking.query.all()
-        return jsonify([{"id": b.id, "customer_id": b.customer_id, "driver_id": b.driver_id, "status": b.status} for b in bookings])
-    except Exception as e:
-        logger.error(f"Admin Bookings Error: {str(e)}")
-        return jsonify({"error": "Failed to fetch bookings"}), 500
-
-@socketio.on('send_message')
-def handle_message(data):
-    try:
-        booking_id = data['booking_id']
-        message = ChatMessage(
-            booking_id=booking_id,
-            sender_id=get_jwt_identity(),
-            message=data['message']
-        )
-        db.session.add(message)
-        db.session.commit()
-        emit('new_message', {'message': data['message'], 'sender_id': get_jwt_identity(), 'timestamp': message.timestamp.isoformat()}, broadcast=True)
-    except Exception as e:
-        logger.error(f"Chat Error: {str(e)}")
 
 if __name__ == '__main__':
     db.create_all()
