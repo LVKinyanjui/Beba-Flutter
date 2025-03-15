@@ -1,5 +1,4 @@
-# frontend
-// main.dart (Merged Version)
+// main.dart (Updated Version)
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -102,17 +101,12 @@ class SignupPage extends StatefulWidget {
 
 class _SignupPageState extends State<SignupPage> {
   final _formKey = GlobalKey<FormState>();
-  String _role = 'customer';
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _idController = TextEditingController();
   final _kraController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _licenseController = TextEditingController();
-  final _vehicleRegController = TextEditingController();
-  final _vehicleTypeController = TextEditingController();
-  final _tonsController = TextEditingController();
 
   Future<void> _signup() async {
     if (_formKey.currentState!.validate()) {
@@ -121,19 +115,12 @@ class _SignupPageState extends State<SignupPage> {
           Uri.parse('https://yourdomain.com/signup'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
-            'role': _role,
             'full_name': _fullNameController.text,
             'phone': _phoneController.text,
             'id_number': _idController.text,
             'kra_pin': _kraController.text,
             'email': _emailController.text,
             'password': _passwordController.text,
-            if (_role == 'driver') ...{
-              'license_number': _licenseController.text,
-              'vehicle_reg': _vehicleRegController.text,
-              'vehicle_type': _vehicleTypeController.text,
-              'tons': _tonsController.text,
-            }
           }),
         );
         if (response.statusCode == 201) {
@@ -162,24 +149,12 @@ class _SignupPageState extends State<SignupPage> {
               child: Column(
                 children: [
                   Text('Ride With Confidence', style: TextStyle(fontStyle: FontStyle.italic, fontSize: 24)),
-                  DropdownButtonFormField<String>(
-                    value: _role,
-                    onChanged: (value) => setState(() => _role = value!),
-                    items: ['customer', 'driver'].map((role) => DropdownMenuItem(value: role, child: Text(role))).toList(),
-                    decoration: InputDecoration(labelText: 'Role'),
-                  ),
                   TextFormField(controller: _fullNameController, decoration: InputDecoration(labelText: 'Full Name'), validator: (v) => v!.isEmpty ? 'Required' : null),
                   TextFormField(controller: _phoneController, decoration: InputDecoration(labelText: 'Phone Number'), validator: (v) => v!.length != 10 ? 'Invalid phone' : null),
                   TextFormField(controller: _idController, decoration: InputDecoration(labelText: 'ID Number'), validator: (v) => v!.isEmpty ? 'Required' : null),
                   TextFormField(controller: _kraController, decoration: InputDecoration(labelText: 'KRA PIN'), validator: (v) => v!.isEmpty ? 'Required' : null),
                   TextFormField(controller: _emailController, decoration: InputDecoration(labelText: 'Email'), validator: (v) => !v!.contains('@') ? 'Invalid email' : null),
                   TextFormField(controller: _passwordController, decoration: InputDecoration(labelText: 'Password'), obscureText: true, validator: (v) => v!.length < 6 ? 'Too short' : null),
-                  if (_role == 'driver') ...[
-                    TextFormField(controller: _licenseController, decoration: InputDecoration(labelText: 'License Number'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                    TextFormField(controller: _vehicleRegController, decoration: InputDecoration(labelText: 'Vehicle Registration'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                    TextFormField(controller: _vehicleTypeController, decoration: InputDecoration(labelText: 'Vehicle Type'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                    TextFormField(controller: _tonsController, decoration: InputDecoration(labelText: 'Tons'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  ],
                   SizedBox(height: 20),
                   ElevatedButton(onPressed: _signup, child: Text('Sign Up'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
                 ],
@@ -202,7 +177,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   SocketIO? socket;
-  String role = JwtDecoder.decode(widget.token)['role'];
   String? profileImageUrl;
 
   @override
@@ -211,16 +185,13 @@ class _HomePageState extends State<HomePage> {
     socket = SocketIOManager().createSocketIO('https://yourdomain.com', '/');
     socket!.connect();
     socket!.on('new_booking', (data) {
-      if (role == 'driver') {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('New booking available: ${data['category']}')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('New booking available: ${data['vehicle_type']}')));
     });
     _fetchProfileImage();
   }
 
   Future<void> _fetchProfileImage() async {
-    // Placeholder: In production, fetch from an API endpoint like /user/profile
-    setState(() => profileImageUrl = null);
+    setState(() => profileImageUrl = null);  // Placeholder
   }
 
   Future<void> _uploadProfileImage() async {
@@ -235,8 +206,6 @@ class _HomePageState extends State<HomePage> {
           final respStr = await response.stream.bytesToString();
           setState(() => profileImageUrl = json.decode(respStr)['url']);
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Profile image uploaded')));
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed')));
         }
       }
     } catch (e) {
@@ -259,7 +228,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
-        actions: role == 'admin' ? [IconButton(icon: Icon(Icons.admin_panel_settings), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => AdminPage(token: widget.token))))] : null,
       ),
       body: Container(
         padding: EdgeInsets.all(16.0),
@@ -268,17 +236,13 @@ class _HomePageState extends State<HomePage> {
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
           children: [
-            _buildCategoryCard('Lorries', Icons.local_shipping, () => BookingForm(token: widget.token, category: 'lorries')),
-            _buildCategoryCard('Transit Goods', Icons.local_shipping, () => BookingForm(token: widget.token, category: 'transit')),
-            _buildCategoryCard('Vans and Buses', Icons.directions_bus, () => BookingForm(token: widget.token, category: 'vans')),
-            _buildCategoryCard('Car Rentals', Icons.directions_car, () => BookingForm(token: widget.token, category: 'cars')),
-            _buildCategoryCard('Multipurpose Trucks', Icons.local_shipping, () => BookingForm(token: widget.token, category: 'multipurpose')),
-            _buildCategoryCard('Tow Trucks', Icons.local_shipping, () => BookingForm(token: widget.token, category: 'tow')),
-            _buildCategoryCard('Water Trucks', Icons.water_drop, () => BookingForm(token: widget.token, category: 'water')),
+            _buildCategoryCard('Add Vehicle', Icons.local_shipping, () => AddVehiclePage(token: widget.token)),
+            _buildCategoryCard('Book Vehicle', Icons.directions_car, () => ListingsPage(token: widget.token, type: 'vehicles')),
             _buildCategoryCard('Beba Insurance', Icons.security, () => InsurancePage(token: widget.token)),
             _buildCategoryCard('Beba Rentals', Icons.home, () => RentalsPage(token: widget.token)),
             _buildCategoryCard('Beba Shamba', Icons.landscape, () => ShambaPage(token: widget.token)),
             _buildCategoryCard('Beba Apartments', Icons.apartment, () => ApartmentsPage(token: widget.token)),
+            _buildCategoryCard('My Listings', Icons.list, () => MyListingsPage(token: widget.token)),
           ],
         ),
       ),
@@ -302,10 +266,83 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+class AddVehiclePage extends StatefulWidget {
+  final String token;
+  AddVehiclePage({required this.token});
+
+  @override
+  _AddVehiclePageState createState() => _AddVehiclePageState();
+}
+
+class _AddVehiclePageState extends State<AddVehiclePage> {
+  final _formKey = GlobalKey<FormState>();
+  final _licenseController = TextEditingController();
+  final _vehicleRegController = TextEditingController();
+  final _vehicleTypeController = TextEditingController();
+  final _tonsController = TextEditingController();
+  PlatformFile? _image;
+
+  Future<void> _addVehicle() async {
+    if (_formKey.currentState!.validate()) {
+      try {
+        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/vehicles'));
+        request.headers['Authorization'] = 'Bearer ${widget.token}';
+        request.fields.addAll({
+          'license_number': _licenseController.text,
+          'vehicle_reg': _vehicleRegController.text,
+          'vehicle_type': _vehicleTypeController.text,
+          'tons': _tonsController.text,
+        });
+        if (_image != null) {
+          request.files.add(await http.MultipartFile.fromPath('image', _image!.path!));
+        }
+        var response = await request.send();
+        if (response.statusCode == 200) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vehicle added')));
+          Navigator.pop(context);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add vehicle')));
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Add Vehicle')),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  TextFormField(controller: _licenseController, decoration: InputDecoration(labelText: 'License Number')),
+                  TextFormField(controller: _vehicleRegController, decoration: InputDecoration(labelText: 'Vehicle Registration'), validator: (v) => v!.isEmpty ? 'Required' : null),
+                  TextFormField(controller: _vehicleTypeController, decoration: InputDecoration(labelText: 'Vehicle Type'), validator: (v) => v!.isEmpty ? 'Required' : null),
+                  TextFormField(controller: _tonsController, decoration: InputDecoration(labelText: 'Tons'), keyboardType: TextInputType.number),
+                  ElevatedButton(onPressed: () async => _image = await FilePicker.platform.pickFiles().then((result) => result!.files.first), child: Text('Upload Image')),
+                  SizedBox(height: 20),
+                  ElevatedButton(onPressed: _addVehicle, child: Text('Add Vehicle'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class BookingForm extends StatefulWidget {
   final String token;
-  final String category;
-  BookingForm({required this.token, required this.category});
+  final int vehicleId;
+  BookingForm({required this.token, required this.vehicleId});
 
   @override
   _BookingFormState createState() => _BookingFormState();
@@ -316,26 +353,18 @@ class _BookingFormState extends State<BookingForm> {
   final _pickupController = TextEditingController();
   final _destinationController = TextEditingController();
   final _budgetController = TextEditingController();
-  final _tonsController = TextEditingController();
-  final _passengersController = TextEditingController();
-  final _daysController = TextEditingController();
-  final _volumeController = TextEditingController();
 
   Future<void> _book() async {
     if (_formKey.currentState!.validate()) {
       try {
         final response = await http.post(
-          Uri.parse('https://yourdomain.com/book_vehicle/${widget.category}'),
+          Uri.parse('https://yourdomain.com/book_vehicle/${widget.vehicleId}'),
           headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
           body: json.encode({
             'pickup': _pickupController.text,
             'destination': _destinationController.text,
             'budget': double.parse(_budgetController.text),
             'phone': JwtDecoder.decode(widget.token)['phone'],
-            if (widget.category.contains('lorries') || widget.category.contains('transit') || widget.category.contains('multipurpose')) 'tons': _tonsController.text,
-            if (widget.category.contains('vans')) 'passengers': _passengersController.text,
-            if (widget.category.contains('cars')) 'days': _daysController.text,
-            if (widget.category.contains('water')) 'volume': _volumeController.text,
           }),
         );
         if (response.statusCode == 200) {
@@ -353,7 +382,7 @@ class _BookingFormState extends State<BookingForm> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Book ${widget.category}')),
+      appBar: AppBar(title: Text('Book Vehicle')),
       body: SingleChildScrollView(
         padding: EdgeInsets.all(16.0),
         child: Card(
@@ -368,14 +397,6 @@ class _BookingFormState extends State<BookingForm> {
                   TextFormField(controller: _destinationController, decoration: InputDecoration(labelText: 'Destination', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Required' : null),
                   SizedBox(height: 10),
                   TextFormField(controller: _budgetController, decoration: InputDecoration(labelText: 'Budget', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  if (widget.category.contains('lorries') || widget.category.contains('transit') || widget.category.contains('multipurpose'))
-                    TextFormField(controller: _tonsController, decoration: InputDecoration(labelText: 'Tons', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  if (widget.category.contains('vans'))
-                    TextFormField(controller: _passengersController, decoration: InputDecoration(labelText: 'Number of Passengers', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  if (widget.category.contains('cars'))
-                    TextFormField(controller: _daysController, decoration: InputDecoration(labelText: 'Number of Days', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  if (widget.category.contains('water'))
-                    TextFormField(controller: _volumeController, decoration: InputDecoration(labelText: 'Volume (litres)', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
                   SizedBox(height: 20),
                   ElevatedButton(onPressed: _book, child: Text('Book Now'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
                 ],
@@ -436,7 +457,7 @@ class _TrackingPageState extends State<TrackingPage> {
           Expanded(
             child: GoogleMap(
               initialCameraPosition: CameraPosition(target: position ?? LatLng(-1.2921, 36.8219), zoom: 12),
-              markers: position != null ? {Marker(markerId: MarkerId('truck'), position: position!)} : {},
+              markers: position != null ? {Marker(markerId: MarkerId('vehicle'), position: position!)} : {},
             ),
           ),
           Padding(
@@ -638,7 +659,7 @@ class _RentalsPageState extends State<RentalsPage> {
   Future<void> _listRental() async {
     if (_formKey.currentState!.validate()) {
       try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/rental'));
+        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/rentals'));
         request.headers['Authorization'] = 'Bearer ${widget.token}';
         request.fields.addAll({
           'location': _locationController.text,
@@ -665,10 +686,7 @@ class _RentalsPageState extends State<RentalsPage> {
   }
 
   Future<void> _browseRentals() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/listings/rentals'));
-    if (response.statusCode == 200) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(type: 'Rentals', listings: json.decode(response.body))));
-    }
+    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'rentals')));
   }
 
   @override
@@ -757,10 +775,7 @@ class _ShambaPageState extends State<ShambaPage> {
   }
 
   Future<void> _browseShamba() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/listings/shamba'));
-    if (response.statusCode == 200) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(type: 'Shamba', listings: json.decode(response.body))));
-    }
+    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'shamba')));
   }
 
   @override
@@ -815,7 +830,7 @@ class _ApartmentsPageState extends State<ApartmentsPage> {
   Future<void> _listApartment() async {
     if (_formKey.currentState!.validate()) {
       try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/apartment'));
+        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/apartments'));
         request.headers['Authorization'] = 'Bearer ${widget.token}';
         request.fields.addAll({
           'location': _locationController.text,
@@ -842,10 +857,7 @@ class _ApartmentsPageState extends State<ApartmentsPage> {
   }
 
   Future<void> _browseApartments() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/listings/apartments'));
-    if (response.statusCode == 200) {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(type: 'Apartments', listings: json.decode(response.body))));
-    }
+    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'apartments')));
   }
 
   @override
@@ -914,64 +926,97 @@ class _MapPickerState extends State<MapPicker> {
 }
 
 class ListingsPage extends StatelessWidget {
+  final String token;
   final String type;
-  final List<dynamic> listings;
-  ListingsPage({required this.type, required this.listings});
+  ListingsPage({required this.token, required this.type});
+
+  Future<List<dynamic>> _fetchListings() async {
+    final response = await http.get(Uri.parse('https://yourdomain.com/listings/$type'), headers: {'Authorization': 'Bearer $token'});
+    return json.decode(response.body);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('Browse $type')),
-      body: ListView.builder(
-        itemCount: listings.length,
-        itemBuilder: (context, index) {
-          var listing = listings[index];
-          return Card(
-            child: ListTile(
-              title: Text(type == 'Shamba' ? '${listing['size']} acres - ${listing['location']}' : '${listing['location']} - ${listing[type == 'Rentals' ? 'house_type' : 'size']}'),
-              subtitle: Text('Ksh ${listing['price']}'),
-              trailing: IconButton(
-                icon: Icon(Icons.image),
-                onPressed: () => showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    content: SingleChildScrollView(
-                      child: Column(children: (listing['images'] as List).map((url) => Image.network(url)).toList()),
-                    ),
+      body: FutureBuilder<List<dynamic>>(
+        future: _fetchListings(),
+        builder: (context, snapshot) {
+          if (snapshot.hasData) {
+            return ListView.builder(
+              itemCount: snapshot.data!.length,
+              itemBuilder: (context, index) {
+                var listing = snapshot.data![index];
+                return Card(
+                  child: ListTile(
+                    title: Text(type == 'vehicles' ? '${listing['vehicle_type']} - ${listing['vehicle_reg']}' : type == 'shamba' ? '${listing['size']} acres - ${listing['location']}' : '${listing['location']} - ${listing[type == 'rentals' ? 'house_type' : 'size']}'),
+                    subtitle: Text('Ksh ${listing['price'] ?? 'N/A'}'),
+                    trailing: type == 'vehicles'
+                        ? ElevatedButton(
+                            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => BookingForm(token: token, vehicleId: listing['id']))),
+                            child: Text('Book'))
+                        : IconButton(
+                            icon: Icon(Icons.image),
+                            onPressed: () => showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                content: SingleChildScrollView(
+                                  child: Column(children: (listing['images'] as List).map((url) => Image.network(url)).toList()),
+                                ),
+                              ),
+                            ),
+                          ),
                   ),
-                ),
-              ),
-            ),
-          );
+                );
+              },
+            );
+          }
+          return Center(child: CircularProgressIndicator());
         },
       ),
     );
   }
 }
 
-class AdminPage extends StatelessWidget {
+class MyListingsPage extends StatefulWidget {
   final String token;
-  AdminPage({required this.token});
+  MyListingsPage({required this.token});
 
-  Future<List<dynamic>> _fetchUsers() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/admin/users'), headers: {'Authorization': 'Bearer $token'});
+  @override
+  _MyListingsPageState createState() => _MyListingsPageState();
+}
+
+class _MyListingsPageState extends State<MyListingsPage> {
+  Future<List<dynamic>> _fetchVehicles() async {
+    final response = await http.get(Uri.parse('https://yourdomain.com/vehicles'), headers: {'Authorization': 'Bearer ${widget.token}'});
     return json.decode(response.body);
   }
 
-  Future<List<dynamic>> _fetchBookings() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/admin/bookings'), headers: {'Authorization': 'Bearer $token'});
-    return json.decode(response.body);
+  Future<void> _removeVehicle(int vehicleId) async {
+    final response = await http.delete(Uri.parse('https://yourdomain.com/vehicles/$vehicleId'), headers: {'Authorization': 'Bearer ${widget.token}'});
+    if (response.statusCode == 200) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vehicle removed')));
+    }
+  }
+
+  Future<void> _removeListing(String type, int id) async {
+    final response = await http.delete(Uri.parse('https://yourdomain.com/$type/$id'), headers: {'Authorization': 'Bearer ${widget.token}'});
+    if (response.statusCode == 200) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$type removed')));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Admin Dashboard')),
+      appBar: AppBar(title: Text('My Listings')),
       body: SingleChildScrollView(
         child: Column(
           children: [
             FutureBuilder<List<dynamic>>(
-              future: _fetchUsers(),
+              future: _fetchVehicles(),
               builder: (context, snapshot) {
                 if (snapshot.hasData) {
                   return Card(
@@ -981,10 +1026,14 @@ class AdminPage extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Users', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          ...snapshot.data!.map((user) => ListTile(
-                                title: Text('${user['user_id']} - ${user['role']}'),
-                                subtitle: Text('Email: ${user['email']}, ID Verified: ${user['id_verified']}'),
+                          Text('My Vehicles', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          ...snapshot.data!.map((vehicle) => ListTile(
+                                title: Text('${vehicle['vehicle_type']} - ${vehicle['vehicle_reg']}'),
+                                subtitle: Text('Status: ${vehicle['status']}'),
+                                trailing: IconButton(
+                                  icon: Icon(Icons.delete),
+                                  onPressed: () => _removeVehicle(vehicle['id']),
+                                ),
                               )),
                         ],
                       ),
@@ -994,30 +1043,7 @@ class AdminPage extends StatelessWidget {
                 return CircularProgressIndicator();
               },
             ),
-            FutureBuilder<List<dynamic>>(
-              future: _fetchBookings(),
-              builder: (context, snapshot) {
-                if (snapshot.hasData) {
-                  return Card(
-                    margin: EdgeInsets.all(16),
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Bookings', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          ...snapshot.data!.map((booking) => ListTile(
-                                title: Text('Booking ID: ${booking['id']}'),
-                                subtitle: Text('Customer: ${booking['customer_id']}, Driver: ${booking['driver_id'] ?? 'N/A'}, Status: ${booking['status']}'),
-                              )),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-                return CircularProgressIndicator();
-              },
-            ),
+            // Add similar sections for rentals, shamba, apartments if needed
           ],
         ),
       ),
