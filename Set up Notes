@@ -1,0 +1,14 @@
+#Set up Notes
+DATABASE_URL=postgresql://user:password@localhost/beba
+SECRET_KEY=your-secret-key
+JWT_SECRET_KEY=jwt-secret-key
+AWS_ACCESS_KEY=your-aws-access-key
+AWS_SECRET_KEY=your-aws-secret-key
+S3_BUCKET_NAME=beba-storage
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASSWORD=your-email-password
+MPESA_CONSUMER_KEY=your-safaricom-consumer-key
+MPESA_CONSUMER_SECRET=your-safaricom-consumer-secret
+MPESA_SHORTCODE=174379
+MPESA_PASSKEY=your-safaricom-passkey
+IPRS_API_KEY=your-iprs-api-key
