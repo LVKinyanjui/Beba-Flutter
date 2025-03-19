@@ -1,0 +1,10 @@
+#Dependencies
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^0.13.4
+  jwt_decoder: ^2.0.1
+  file_picker: ^5.2.0
+  google_maps_flutter: ^2.2.1
+  flutter_socket_io: ^0.6.0
+  flutter_rating_bar: ^4.0.1
