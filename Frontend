@@ -1,13 +1,10 @@
-// main.dart (Updated Version)
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:jwt_decoder/jwt_decoder.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:flutter_socket_io/flutter_socket_io.dart';
-import 'package:flutter_socket_io/socket_io_manager.dart';
-import 'package:flutter_rating_bar/flutter_rating_bar.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 void main() {
   runApp(BebaApp());
@@ -17,75 +14,220 @@ class BebaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Beba',
+      title: 'Beba - Ride With Confidence',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
-        cardTheme: CardTheme(elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        scaffoldBackgroundColor: Colors.grey[100],
+        textTheme: TextTheme(
+          headline6: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          bodyText2: TextStyle(fontSize: 16),
+        ),
       ),
-      home: LoginPage(),
+      home: AuthWrapper(),
     );
   }
 }
 
-class LoginPage extends StatefulWidget {
+class AuthWrapper extends StatefulWidget {
   @override
-  _LoginPageState createState() => _LoginPageState();
+  _AuthWrapperState createState() => _AuthWrapperState();
 }
 
-class _LoginPageState extends State<LoginPage> {
+class _AuthWrapperState extends State<AuthWrapper> {
+  String? token;
+  bool? isDriver;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkToken();
+  }
+
+  Future<void> _checkToken() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      token = prefs.getString('token');
+      isDriver = prefs.getBool('is_driver') ?? false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (token == null) {
+      return LoginScreen();
+    } else if (JwtDecoder.isExpired(token!)) {
+      return LoginScreen();
+    } else {
+      return DashboardScreen(token: token!, isDriver: isDriver!);
+    }
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  @override
+  _LoginScreenState createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  String? _token;
+  bool _isLoading = false;
 
   Future<void> _login() async {
-    try {
-      final response = await http.post(
-        Uri.parse('https://yourdomain.com/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': _emailController.text,
-          'password': _passwordController.text,
-        }),
-      );
-      if (response.statusCode == 200) {
-        setState(() => _token = json.decode(response.body)['access_token']);
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => HomePage(token: _token!)));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login failed')));
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    setState(() => _isLoading = true);
+    final response = await http.post(
+      Uri.parse('https://yourdomain.com/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': _emailController.text.trim(),
+        'password': _passwordController.text,
+      }),
+    );
+    setState(() => _isLoading = false);
+    if (response.statusCode == 200) {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      var data = jsonDecode(response.body);
+      String token = data['access_token'];
+      bool isDriver = data['is_driver'];
+      await prefs.setString('token', token);
+      await prefs.setBool('is_driver', isDriver);
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DashboardScreen(token: token, isDriver: isDriver)));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login failed: ${jsonDecode(response.body)['error'] ?? 'Unknown error'}')));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.blue, Colors.lightBlueAccent], begin: Alignment.topLeft, end: Alignment.bottomRight)),
-        child: Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('Ride With Confidence', style: TextStyle(fontStyle: FontStyle.italic, fontSize: 28, color: Colors.white, fontWeight: FontWeight.bold)),
-              SizedBox(height: 20),
-              Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      TextField(controller: _emailController, decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder())),
-                      SizedBox(height: 10),
-                      TextField(controller: _passwordController, decoration: InputDecoration(labelText: 'Password', border: OutlineInputBorder()), obscureText: true),
-                      SizedBox(height: 20),
-                      ElevatedButton(onPressed: _login, child: Text('Login'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                      TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => SignupPage())), child: Text('Sign Up')),
-                    ],
+      appBar: AppBar(title: Text('Beba Login')),
+      body: Padding(
+        padding: EdgeInsets.all(16.0),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('Welcome to Beba', style: Theme.of(context).textTheme.headline6),
+                SizedBox(height: 20),
+                TextField(
+                  controller: _emailController,
+                  decoration: InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.email),
                   ),
                 ),
+                SizedBox(height: 10),
+                TextField(
+                  controller: _passwordController,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.lock),
+                  ),
+                  obscureText: true,
+                ),
+                SizedBox(height: 20),
+                _isLoading
+                    ? CircularProgressIndicator()
+                    : ElevatedButton(
+                        onPressed: _login,
+                        style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50)),
+                        child: Text('Login'),
+                      ),
+                SizedBox(height: 10),
+                TextButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SignupScreen())),
+                  child: Text('Don’t have an account? Sign Up'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SignupScreen extends StatefulWidget {
+  @override
+  _SignupScreenState createState() => _SignupScreenState();
+}
+
+class _SignupScreenState extends State<SignupScreen> {
+  final _fullNameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _idController = TextEditingController();
+  final _kraController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isDriver = false;
+  bool _isLoading = false;
+
+  Future<void> _signup() async {
+    setState(() => _isLoading = true);
+    final response = await http.post(
+      Uri.parse('https://yourdomain.com/signup'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'full_name': _fullNameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'id_number': _idController.text.trim(),
+        'kra_pin': _kraController.text.trim(),
+        'email': _emailController.text.trim(),
+        'password': _passwordController.text,
+        'is_driver': _isDriver,
+      }),
+    );
+    setState(() => _isLoading = false);
+    if (response.statusCode == 201) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Signup successful! Please login.')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Signup failed: ${jsonDecode(response.body)['error'] ?? 'Unknown error'}')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Sign Up')),
+      body: Padding(
+        padding: EdgeInsets.all(16.0),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Create Your Beba Account', style: Theme.of(context).textTheme.headline6),
+              SizedBox(height: 20),
+              TextField(controller: _fullNameController, decoration: InputDecoration(labelText: 'Full Name', border: OutlineInputBorder())),
+              SizedBox(height: 10),
+              TextField(controller: _phoneController, decoration: InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder())),
+              SizedBox(height: 10),
+              TextField(controller: _idController, decoration: InputDecoration(labelText: 'ID Number', border: OutlineInputBorder())),
+              SizedBox(height: 10),
+              TextField(controller: _kraController, decoration: InputDecoration(labelText: 'KRA PIN', border: OutlineInputBorder())),
+              SizedBox(height: 10),
+              TextField(controller: _emailController, decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder())),
+              SizedBox(height: 10),
+              TextField(controller: _passwordController, decoration: InputDecoration(labelText: 'Password', border: OutlineInputBorder()), obscureText: true),
+              SizedBox(height: 10),
+              CheckboxListTile(
+                title: Text('Register as Driver'),
+                value: _isDriver,
+                onChanged: (value) => setState(() => _isDriver = value!),
+                controlAffinity: ListTileControlAffinity.leading,
               ),
+              SizedBox(height: 20),
+              _isLoading
+                  ? Center(child: CircularProgressIndicator())
+                  : ElevatedButton(
+                      onPressed: _signup,
+                      style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50)),
+                      child: Text('Sign Up'),
+                    ),
             ],
           ),
         ),
@@ -94,959 +236,494 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-class SignupPage extends StatefulWidget {
-  @override
-  _SignupPageState createState() => _SignupPageState();
-}
-
-class _SignupPageState extends State<SignupPage> {
-  final _formKey = GlobalKey<FormState>();
-  final _fullNameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _idController = TextEditingController();
-  final _kraController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-
-  Future<void> _signup() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        final response = await http.post(
-          Uri.parse('https://yourdomain.com/signup'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({
-            'full_name': _fullNameController.text,
-            'phone': _phoneController.text,
-            'id_number': _idController.text,
-            'kra_pin': _kraController.text,
-            'email': _emailController.text,
-            'password': _passwordController.text,
-          }),
-        );
-        if (response.statusCode == 201) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Signup successful, ID verified with IPRS')));
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(json.decode(response.body)['error'] ?? 'Signup failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Beba Signup')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  Text('Ride With Confidence', style: TextStyle(fontStyle: FontStyle.italic, fontSize: 24)),
-                  TextFormField(controller: _fullNameController, decoration: InputDecoration(labelText: 'Full Name'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _phoneController, decoration: InputDecoration(labelText: 'Phone Number'), validator: (v) => v!.length != 10 ? 'Invalid phone' : null),
-                  TextFormField(controller: _idController, decoration: InputDecoration(labelText: 'ID Number'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _kraController, decoration: InputDecoration(labelText: 'KRA PIN'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _emailController, decoration: InputDecoration(labelText: 'Email'), validator: (v) => !v!.contains('@') ? 'Invalid email' : null),
-                  TextFormField(controller: _passwordController, decoration: InputDecoration(labelText: 'Password'), obscureText: true, validator: (v) => v!.length < 6 ? 'Too short' : null),
-                  SizedBox(height: 20),
-                  ElevatedButton(onPressed: _signup, child: Text('Sign Up'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class HomePage extends StatefulWidget {
+class DashboardScreen extends StatefulWidget {
   final String token;
-  HomePage({required this.token});
+  final bool isDriver;
+  DashboardScreen({required this.token, required this.isDriver});
 
   @override
-  _HomePageState createState() => _HomePageState();
+  _DashboardScreenState createState() => _DashboardScreenState();
 }
 
-class _HomePageState extends State<HomePage> {
-  SocketIO? socket;
-  String? profileImageUrl;
+class _DashboardScreenState extends State<DashboardScreen> {
+  late IO.Socket socket;
+  List<Map<String, dynamic>> vehicles = [];
+  List<Map<String, dynamic>> availableVehicles = [];
+  List<Map<String, dynamic>> rentals = [];
+  List<Map<String, dynamic>> shamba = [];
+  List<Map<String, dynamic>> apartments = [];
+  List<Map<String, dynamic>> transportJobs = [];
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    socket = SocketIOManager().createSocketIO('https://yourdomain.com', '/');
-    socket!.connect();
-    socket!.on('new_booking', (data) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('New booking available: ${data['vehicle_type']}')));
+    _connectSocket();
+    _loadData();
+  }
+
+  void _connectSocket() {
+    socket = IO.io('https://yourdomain.com', <String, dynamic>{
+      'transports': ['websocket'],
+      'autoConnect': false,
     });
-    _fetchProfileImage();
+    socket.connect();
+    socket.onConnect((_) => print('Socket connected'));
+    socket.on('vehicle_added', (data) => _loadVehicles());
+    socket.on('booking', (data) => _loadAvailableVehicles());
+    socket.on('rentals_added', (data) => _loadListings('rentals'));
+    socket.on('shamba_added', (data) => _loadListings('shamba'));
+    socket.on('apartments_added', (data) => _loadListings('apartments'));
+    socket.on('transport_job_added', (data) => _loadTransportJobs());
+    socket.on('payment_confirmed', (data) => _loadData());
+    socket.onDisconnect((_) => print('Socket disconnected'));
   }
 
-  Future<void> _fetchProfileImage() async {
-    setState(() => profileImageUrl = null);  // Placeholder
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    await Future.wait([
+      _loadVehicles(),
+      _loadAvailableVehicles(),
+      _loadListings('rentals'),
+      _loadListings('shamba'),
+      _loadListings('apartments'),
+      if (widget.isDriver) _loadTransportJobs(),
+    ]);
+    setState(() => _isLoading = false);
   }
 
-  Future<void> _uploadProfileImage() async {
-    try {
-      final result = await FilePicker.platform.pickFiles();
-      if (result != null) {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/upload_profile_image'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.files.add(await http.MultipartFile.fromPath('image', result.files.first.path!));
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          final respStr = await response.stream.bytesToString();
-          setState(() => profileImageUrl = json.decode(respStr)['url']);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Profile image uploaded')));
-        }
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+  Future<void> _loadVehicles() async {
+    final response = await http.get(Uri.parse('https://yourdomain.com/vehicles'), headers: {'Authorization': 'Bearer ${widget.token}'});
+    if (response.statusCode == 200) {
+      setState(() => vehicles = List<Map<String, dynamic>>.from(jsonDecode(response.body)));
     }
+  }
+
+  Future<void> _loadAvailableVehicles() async {
+    final response = await http.get(Uri.parse('https://yourdomain.com/listings/vehicles'), headers: {'Authorization': 'Bearer ${widget.token}'});
+    if (response.statusCode == 200) {
+      setState(() => availableVehicles = List<Map<String, dynamic>>.from(jsonDecode(response.body)));
+    }
+  }
+
+  Future<void> _loadListings(String type) async {
+    final response = await http.get(Uri.parse('https://yourdomain.com/listings/$type'), headers: {'Authorization': 'Bearer ${widget.token}'});
+    if (response.statusCode == 200) {
+      setState(() {
+        if (type == 'rentals') rentals = List<Map<String, dynamic>>.from(jsonDecode(response.body));
+        else if (type == 'shamba') shamba = List<Map<String, dynamic>>.from(jsonDecode(response.body));
+        else if (type == 'apartments') apartments = List<Map<String, dynamic>>.from(jsonDecode(response.body));
+      });
+    }
+  }
+
+  Future<void> _loadTransportJobs({String pickup = '', String destination = ''}) async {
+    final response = await http.get(
+      Uri.parse('https://yourdomain.com/transport_jobs?pickup_location=$pickup&destination=$destination'),
+      headers: {'Authorization': 'Bearer ${widget.token}'},
+    );
+    if (response.statusCode == 200) {
+      setState(() => transportJobs = List<Map<String, dynamic>>.from(jsonDecode(response.body)));
+    }
+  }
+
+  Future<void> _addVehicle() async {
+    final reg = TextEditingController();
+    final type = TextEditingController();
+    final tons = TextEditingController();
+    PlatformFile? image;
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Add Vehicle (Free)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: reg, decoration: InputDecoration(labelText: 'Vehicle Registration')),
+              TextField(controller: type, decoration: InputDecoration(labelText: 'Vehicle Type')),
+              TextField(controller: tons, decoration: InputDecoration(labelText: 'Tons')),
+              ElevatedButton(
+                onPressed: () async {
+                  final result = await FilePicker.platform.pickFiles(type: FileType.image);
+                  if (result != null) image = result.files.first;
+                },
+                child: Text('Pick Image'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/vehicles'));
+              request.headers['Authorization'] = 'Bearer ${widget.token}';
+              request.fields['vehicle_reg'] = reg.text;
+              request.fields['vehicle_type'] = type.text;
+              if (tons.text.isNotEmpty) request.fields['tons'] = tons.text;
+              if (image != null) request.files.add(await http.MultipartFile.fromPath('image', image!.path!));
+              final response = await request.send();
+              if (response.statusCode == 201) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vehicle added successfully (free)')));
+                _loadVehicles();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add vehicle')));
+              }
+            },
+            child: Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _bookVehicle(int vehicleId) async {
+    final pickup = TextEditingController();
+    final destination = TextEditingController();
+    final budget = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Book Vehicle (Ksh 100)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('You will be prompted to pay Ksh 100 via M-Pesa.'),
+              TextField(controller: pickup, decoration: InputDecoration(labelText: 'Pickup Location')),
+              TextField(controller: destination, decoration: InputDecoration(labelText: 'Destination')),
+              TextField(controller: budget, decoration: InputDecoration(labelText: 'Budget')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              final response = await http.post(
+                Uri.parse('https://yourdomain.com/book_vehicle/$vehicleId'),
+                headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'pickup': pickup.text,
+                  'destination': destination.text,
+                  'budget': int.parse(budget.text),
+                }),
+              );
+              if (response.statusCode == 202) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please complete Ksh 100 payment on your phone.')));
+                _loadAvailableVehicles();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Booking failed: ${jsonDecode(response.body)['error'] ?? 'Unknown error'}')));
+              }
+            },
+            child: Text('Initiate Payment'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addListing(String type) async {
+    final location = TextEditingController();
+    final details = TextEditingController();
+    final price = TextEditingController();
+    List<PlatformFile>? images;
+    PlatformFile? titleDeed;
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Add $type Listing (Ksh 100)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('You will be prompted to pay Ksh 100 via M-Pesa.'),
+              TextField(controller: location, decoration: InputDecoration(labelText: 'Location')),
+              TextField(controller: details, decoration: InputDecoration(labelText: type == 'Rentals' ? 'House Type' : 'Details')),
+              TextField(controller: price, decoration: InputDecoration(labelText: 'Price')),
+              ElevatedButton(
+                onPressed: () async {
+                  final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: true);
+                  if (result != null) images = result.files;
+                },
+                child: Text('Pick Images'),
+              ),
+              if (type == 'Shamba')
+                ElevatedButton(
+                  onPressed: () async {
+                    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+                    if (result != null) titleDeed = result.files.first;
+                  },
+                  child: Text('Pick Title Deed'),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/listings/${type.toLowerCase()}s'));
+              request.headers['Authorization'] = 'Bearer ${widget.token}';
+              request.fields['location'] = location.text;
+              request.fields['details'] = details.text;
+              request.fields['price'] = price.text;
+              if (images != null) {
+                for (var img in images!) {
+                  request.files.add(await http.MultipartFile.fromPath('images', img.path!));
+                }
+              }
+              if (type == 'Shamba' && titleDeed != null) {
+                request.files.add(await http.MultipartFile.fromPath('title_deed', titleDeed!.path!));
+              }
+              final response = await request.send();
+              if (response.statusCode == 202) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please complete Ksh 100 payment on your phone.')));
+                _loadListings('${type.toLowerCase()}s');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add listing')));
+              }
+            },
+            child: Text('Initiate Payment'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addTransportJob() async {
+    final pickup = TextEditingController();
+    final destination = TextEditingController();
+    final description = TextEditingController();
+    final budget = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Post Transport Job (Ksh 100)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('You will be prompted to pay Ksh 100 via M-Pesa.'),
+              TextField(controller: pickup, decoration: InputDecoration(labelText: 'Pickup Location')),
+              TextField(controller: destination, decoration: InputDecoration(labelText: 'Destination')),
+              TextField(controller: description, decoration: InputDecoration(labelText: 'Description')),
+              TextField(controller: budget, decoration: InputDecoration(labelText: 'Budget')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              final response = await http.post(
+                Uri.parse('https://yourdomain.com/transport_jobs'),
+                headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'pickup_location': pickup.text,
+                  'destination': destination.text,
+                  'description': description.text,
+                  'budget': int.parse(budget.text),
+                }),
+              );
+              if (response.statusCode == 202) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please complete Ksh 100 payment on your phone.')));
+                _loadTransportJobs();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to post job: ${jsonDecode(response.body)['error'] ?? 'Unknown error'}')));
+              }
+            },
+            child: Text('Initiate Payment'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _searchTransportJobs() async {
+    final pickup = TextEditingController();
+    final destination = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Search Transport Jobs'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: pickup, decoration: InputDecoration(labelText: 'Pickup Location')),
+            TextField(controller: destination, decoration: InputDecoration(labelText: 'Destination')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _loadTransportJobs(pickup: pickup.text, destination: destination.text);
+            },
+            child: Text('Search'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addInsurance() async {
+    final vehicleId = TextEditingController();
+    final policyNumber = TextEditingController();
+    final expiryDate = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Add Insurance (Free)'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: vehicleId, decoration: InputDecoration(labelText: 'Vehicle ID')),
+              TextField(controller: policyNumber, decoration: InputDecoration(labelText: 'Policy Number')),
+              TextField(controller: expiryDate, decoration: InputDecoration(labelText: 'Expiry Date (YYYY-MM-DD)')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              final response = await http.post(
+                Uri.parse('https://yourdomain.com/insurance'),
+                headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'vehicle_id': int.parse(vehicleId.text),
+                  'policy_number': policyNumber.text,
+                  'expiry_date': expiryDate.text,
+                }),
+              );
+              if (response.statusCode == 201) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Insurance added successfully (free)')));
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add insurance')));
+              }
+            },
+            child: Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Beba Home'),
-        leading: GestureDetector(
-          onTap: _uploadProfileImage,
-          child: Padding(
-            padding: EdgeInsets.all(8.0),
-            child: CircleAvatar(
-              backgroundImage: profileImageUrl != null ? NetworkImage(profileImageUrl!) : null,
-              child: profileImageUrl == null ? Icon(Icons.person, size: 30) : null,
-            ),
-          ),
-        ),
-      ),
-      body: Container(
-        padding: EdgeInsets.all(16.0),
-        child: GridView.count(
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          children: [
-            _buildCategoryCard('Add Vehicle', Icons.local_shipping, () => AddVehiclePage(token: widget.token)),
-            _buildCategoryCard('Book Vehicle', Icons.directions_car, () => ListingsPage(token: widget.token, type: 'vehicles')),
-            _buildCategoryCard('Beba Insurance', Icons.security, () => InsurancePage(token: widget.token)),
-            _buildCategoryCard('Beba Rentals', Icons.home, () => RentalsPage(token: widget.token)),
-            _buildCategoryCard('Beba Shamba', Icons.landscape, () => ShambaPage(token: widget.token)),
-            _buildCategoryCard('Beba Apartments', Icons.apartment, () => ApartmentsPage(token: widget.token)),
-            _buildCategoryCard('My Listings', Icons.list, () => MyListingsPage(token: widget.token)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCategoryCard(String title, IconData icon, Widget Function() page) {
-    return Card(
-      child: InkWell(
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => page())),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 50, color: Colors.blue),
-            SizedBox(height: 10),
-            Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class AddVehiclePage extends StatefulWidget {
-  final String token;
-  AddVehiclePage({required this.token});
-
-  @override
-  _AddVehiclePageState createState() => _AddVehiclePageState();
-}
-
-class _AddVehiclePageState extends State<AddVehiclePage> {
-  final _formKey = GlobalKey<FormState>();
-  final _licenseController = TextEditingController();
-  final _vehicleRegController = TextEditingController();
-  final _vehicleTypeController = TextEditingController();
-  final _tonsController = TextEditingController();
-  PlatformFile? _image;
-
-  Future<void> _addVehicle() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/vehicles'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.fields.addAll({
-          'license_number': _licenseController.text,
-          'vehicle_reg': _vehicleRegController.text,
-          'vehicle_type': _vehicleTypeController.text,
-          'tons': _tonsController.text,
-        });
-        if (_image != null) {
-          request.files.add(await http.MultipartFile.fromPath('image', _image!.path!));
-        }
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vehicle added')));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add vehicle')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Add Vehicle')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  TextFormField(controller: _licenseController, decoration: InputDecoration(labelText: 'License Number')),
-                  TextFormField(controller: _vehicleRegController, decoration: InputDecoration(labelText: 'Vehicle Registration'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _vehicleTypeController, decoration: InputDecoration(labelText: 'Vehicle Type'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _tonsController, decoration: InputDecoration(labelText: 'Tons'), keyboardType: TextInputType.number),
-                  ElevatedButton(onPressed: () async => _image = await FilePicker.platform.pickFiles().then((result) => result!.files.first), child: Text('Upload Image')),
-                  SizedBox(height: 20),
-                  ElevatedButton(onPressed: _addVehicle, child: Text('Add Vehicle'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class BookingForm extends StatefulWidget {
-  final String token;
-  final int vehicleId;
-  BookingForm({required this.token, required this.vehicleId});
-
-  @override
-  _BookingFormState createState() => _BookingFormState();
-}
-
-class _BookingFormState extends State<BookingForm> {
-  final _formKey = GlobalKey<FormState>();
-  final _pickupController = TextEditingController();
-  final _destinationController = TextEditingController();
-  final _budgetController = TextEditingController();
-
-  Future<void> _book() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        final response = await http.post(
-          Uri.parse('https://yourdomain.com/book_vehicle/${widget.vehicleId}'),
-          headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
-          body: json.encode({
-            'pickup': _pickupController.text,
-            'destination': _destinationController.text,
-            'budget': double.parse(_budgetController.text),
-            'phone': JwtDecoder.decode(widget.token)['phone'],
-          }),
-        );
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Booking successful, please complete payment')));
-          Navigator.push(context, MaterialPageRoute(builder: (context) => TrackingPage(token: widget.token, bookingId: json.decode(response.body)['booking_id'])));
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Booking failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Book Vehicle')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Card(
-          child: Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                children: [
-                  TextFormField(controller: _pickupController, decoration: InputDecoration(labelText: 'Pick-Up Point', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  SizedBox(height: 10),
-                  TextFormField(controller: _destinationController, decoration: InputDecoration(labelText: 'Destination', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  SizedBox(height: 10),
-                  TextFormField(controller: _budgetController, decoration: InputDecoration(labelText: 'Budget', border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  SizedBox(height: 20),
-                  ElevatedButton(onPressed: _book, child: Text('Book Now'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class TrackingPage extends StatefulWidget {
-  final String token;
-  final int bookingId;
-  TrackingPage({required this.token, required this.bookingId});
-
-  @override
-  _TrackingPageState createState() => _TrackingPageState();
-}
-
-class _TrackingPageState extends State<TrackingPage> {
-  SocketIO? socket;
-  LatLng? position;
-  double rating = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    socket = SocketIOManager().createSocketIO('https://yourdomain.com', '/');
-    socket!.connect();
-    socket!.on('tracking_update', (data) {
-      if (data['booking_id'] == widget.bookingId) {
-        setState(() => position = LatLng(data['lat'], data['lng']));
-      }
-    });
-  }
-
-  Future<void> _submitRating() async {
-    try {
-      await http.post(
-        Uri.parse('https://yourdomain.com/rate'),
-        headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
-        body: json.encode({'booking_id': widget.bookingId, 'rating': rating}),
-      );
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rating submitted')));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Track Booking')),
-      body: Column(
-        children: [
-          Expanded(
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: position ?? LatLng(-1.2921, 36.8219), zoom: 12),
-              markers: position != null ? {Marker(markerId: MarkerId('vehicle'), position: position!)} : {},
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                ElevatedButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => ChatPage(token: widget.token, bookingId: widget.bookingId))),
-                  child: Text('Open Chat'),
-                  style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50)),
-                ),
-                SizedBox(height: 10),
-                RatingBar.builder(
-                  initialRating: 0,
-                  minRating: 1,
-                  direction: Axis.horizontal,
-                  allowHalfRating: false,
-                  itemCount: 5,
-                  itemBuilder: (context, _) => Icon(Icons.star, color: Colors.amber),
-                  onRatingUpdate: (value) => setState(() => rating = value),
-                ),
-                SizedBox(height: 10),
-                ElevatedButton(onPressed: _submitRating, child: Text('Submit Rating'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-              ],
-            ),
+        title: Text('Beba Dashboard'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.logout),
+            onPressed: () async {
+              SharedPreferences prefs = await SharedPreferences.getInstance();
+              await prefs.remove('token');
+              await prefs.remove('is_driver');
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => LoginScreen()));
+            },
           ),
         ],
       ),
-    );
-  }
-}
-
-class ChatPage extends StatefulWidget {
-  final String token;
-  final int bookingId;
-  ChatPage({required this.token, required this.bookingId});
-
-  @override
-  _ChatPageState createState() => _ChatPageState();
-}
-
-class _ChatPageState extends State<ChatPage> {
-  SocketIO? socket;
-  final _messageController = TextEditingController();
-  List<String> messages = [];
-
-  @override
-  void initState() {
-    super.initState();
-    socket = SocketIOManager().createSocketIO('https://yourdomain.com', '/');
-    socket!.connect();
-    socket!.on('new_message', (data) {
-      setState(() => messages.add(data['message']));
-    });
-  }
-
-  void _sendMessage() {
-    socket!.emit('send_message', {'booking_id': widget.bookingId, 'message': _messageController.text});
-    _messageController.clear();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Chat')),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              itemCount: messages.length,
-              itemBuilder: (context, index) => Card(
-                margin: EdgeInsets.symmetric(vertical: 5, horizontal: 10),
-                child: Padding(padding: EdgeInsets.all(10), child: Text(messages[index])),
-              ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(child: TextField(controller: _messageController, decoration: InputDecoration(labelText: 'Message', border: OutlineInputBorder()))),
-                IconButton(icon: Icon(Icons.send), onPressed: _sendMessage),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class InsurancePage extends StatefulWidget {
-  final String token;
-  InsurancePage({required this.token});
-
-  @override
-  _InsurancePageState createState() => _InsurancePageState();
-}
-
-class _InsurancePageState extends State<InsurancePage> {
-  final _formKey = GlobalKey<FormState>();
-  final _vehicleRegController = TextEditingController();
-  final _kraPinController = TextEditingController();
-  final _valuationController = TextEditingController();
-  String? _coverageType;
-  String? _insurer;
-  PlatformFile? _logbook;
-  PlatformFile? _idPhoto;
-
-  Future<void> _applyInsurance() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/insurance'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.fields.addAll({
-          'vehicle_reg': _vehicleRegController.text,
-          'kra_pin': _kraPinController.text,
-          'valuation': _valuationController.text,
-          'coverage_type': _coverageType!,
-          'insurer': _insurer!,
-          'cost': (double.parse(_valuationController.text) * 0.05).toString(),
-        });
-        request.files.add(await http.MultipartFile.fromPath('logbook', _logbook!.path!));
-        request.files.add(await http.MultipartFile.fromPath('id_photo', _idPhoto!.path!));
-        
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Insurance application submitted')));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Application failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Beba Insurance')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
               padding: EdgeInsets.all(16.0),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextFormField(controller: _vehicleRegController, decoration: InputDecoration(labelText: 'Vehicle Registration'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _kraPinController, decoration: InputDecoration(labelText: 'KRA PIN'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _valuationController, decoration: InputDecoration(labelText: 'Vehicle Valuation'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  DropdownButtonFormField<String>(
-                    value: _coverageType,
-                    hint: Text('Select Coverage'),
-                    items: ['TPO', 'Third Party Fire and Theft', 'Comprehensive'].map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
-                    onChanged: (value) => setState(() => _coverageType = value),
-                    validator: (v) => v == null ? 'Required' : null,
-                  ),
-                  DropdownButtonFormField<String>(
-                    value: _insurer,
-                    hint: Text('Select Insurer'),
-                    items: ['Jubilee', 'CIC', 'APA', 'Britam'].map((ins) => DropdownMenuItem(value: ins, child: Text(ins))).toList(),
-                    onChanged: (value) => setState(() => _insurer = value),
-                    validator: (v) => v == null ? 'Required' : null,
-                  ),
-                  ElevatedButton(onPressed: () async => _logbook = await FilePicker.platform.pickFiles().then((result) => result!.files.first), child: Text('Upload Logbook')),
-                  ElevatedButton(onPressed: () async => _idPhoto = await FilePicker.platform.pickFiles().then((result) => result!.files.first), child: Text('Upload ID Photo')),
-                  SizedBox(height: 20),
-                  ElevatedButton(onPressed: _applyInsurance, child: Text('Apply'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class RentalsPage extends StatefulWidget {
-  final String token;
-  RentalsPage({required this.token});
-
-  @override
-  _RentalsPageState createState() => _RentalsPageState();
-}
-
-class _RentalsPageState extends State<RentalsPage> {
-  final _formKey = GlobalKey<FormState>();
-  final _locationController = TextEditingController();
-  final _priceController = TextEditingController();
-  String? _houseType;
-  List<PlatformFile> _images = [];
-  LatLng? _location;
-
-  Future<void> _listRental() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/rentals'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.fields.addAll({
-          'location': _locationController.text,
-          'house_type': _houseType!,
-          'price': _priceController.text,
-          'lat': _location!.latitude.toString(),
-          'lng': _location!.longitude.toString(),
-        });
-        for (var image in _images) {
-          request.files.add(await http.MultipartFile.fromPath('images', image.path!));
-        }
-        
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rental listed, complete payment')));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Listing failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  Future<void> _browseRentals() async {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'rentals')));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Beba Rentals')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  TextFormField(controller: _locationController, decoration: InputDecoration(labelText: 'Location'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  DropdownButtonFormField<String>(
-                    value: _houseType,
-                    hint: Text('Select House Type'),
-                    items: ['Single Room', 'Bed-Sitter', 'One Bedroom', 'Two Bedrooms', '3+ Bedrooms', 'Stand Alone'].map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
-                    onChanged: (value) => setState(() => _houseType = value),
-                    validator: (v) => v == null ? 'Required' : null,
-                  ),
-                  TextFormField(controller: _priceController, decoration: InputDecoration(labelText: 'Price'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  ElevatedButton(onPressed: () async => _images = (await FilePicker.platform.pickFiles(allowMultiple: true))!.files, child: Text('Upload Images')),
-                  ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MapPicker(onSelect: (pos) => _location = pos))), child: Text('Pin Location')),
-                  SizedBox(height: 20),
-                  ElevatedButton(onPressed: _listRental, child: Text('List Rental (Ksh 100)'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
+                  ElevatedButton(onPressed: _addVehicle, child: Text('Add Vehicle (Free)')),
                   SizedBox(height: 10),
-                  ElevatedButton(onPressed: _browseRentals, child: Text('Browse Rentals'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class ShambaPage extends StatefulWidget {
-  final String token;
-  ShambaPage({required this.token});
-
-  @override
-  _ShambaPageState createState() => _ShambaPageState();
-}
-
-class _ShambaPageState extends State<ShambaPage> {
-  final _formKey = GlobalKey<FormState>();
-  final _sizeController = TextEditingController();
-  final _locationController = TextEditingController();
-  final _priceController = TextEditingController();
-  PlatformFile? _titleDeed;
-  List<PlatformFile> _images = [];
-  LatLng? _location;
-
-  Future<void> _listShamba() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/shamba'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.fields.addAll({
-          'size': _sizeController.text,
-          'location': _locationController.text,
-          'price': _priceController.text,
-          'lat': _location!.latitude.toString(),
-          'lng': _location!.longitude.toString(),
-        });
-        request.files.add(await http.MultipartFile.fromPath('title_deed', _titleDeed!.path!));
-        for (var image in _images) {
-          request.files.add(await http.MultipartFile.fromPath('images', image.path!));
-        }
-        
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Shamba listed, complete payment')));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Listing failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  Future<void> _browseShamba() async {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'shamba')));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Beba Shamba')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  TextFormField(controller: _sizeController, decoration: InputDecoration(labelText: 'Size (acres)'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _locationController, decoration: InputDecoration(labelText: 'Location'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _priceController, decoration: InputDecoration(labelText: 'Price'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  ElevatedButton(onPressed: () async => _titleDeed = await FilePicker.platform.pickFiles().then((result) => result!.files.first), child: Text('Upload Title Deed')),
-                  ElevatedButton(onPressed: () async => _images = (await FilePicker.platform.pickFiles(allowMultiple: true))!.files, child: Text('Upload Images')),
-                  ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MapPicker(onSelect: (pos) => _location = pos))), child: Text('Pin Location')),
+                  Text('My Vehicles:', style: Theme.of(context).textTheme.headline6),
+                  SizedBox(height: 5),
+                  ...vehicles.map((v) => Card(
+                        child: ListTile(
+                          title: Text('${v['vehicle_type']} - ${v['vehicle_reg']}'),
+                          subtitle: Text('Tons: ${v['tons'] ?? 'N/A'} | Created: ${v['created_at']}'),
+                        ),
+                      )),
                   SizedBox(height: 20),
-                  ElevatedButton(onPressed: _listShamba, child: Text('List Shamba (Ksh 100)'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
+                  ElevatedButton(onPressed: () => _addListing('Rentals'), child: Text('Add Rental Listing (Ksh 100)')),
                   SizedBox(height: 10),
-                  ElevatedButton(onPressed: _browseShamba, child: Text('Browse Shamba'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class ApartmentsPage extends StatefulWidget {
-  final String token;
-  ApartmentsPage({required this.token});
-
-  @override
-  _ApartmentsPageState createState() => _ApartmentsPageState();
-}
-
-class _ApartmentsPageState extends State<ApartmentsPage> {
-  final _formKey = GlobalKey<FormState>();
-  final _locationController = TextEditingController();
-  final _sizeController = TextEditingController();
-  final _priceController = TextEditingController();
-  List<PlatformFile> _images = [];
-  LatLng? _location;
-
-  Future<void> _listApartment() async {
-    if (_formKey.currentState!.validate()) {
-      try {
-        var request = http.MultipartRequest('POST', Uri.parse('https://yourdomain.com/apartments'));
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-        request.fields.addAll({
-          'location': _locationController.text,
-          'size': _sizeController.text,
-          'price': _priceController.text,
-          'lat': _location!.latitude.toString(),
-          'lng': _location!.longitude.toString(),
-        });
-        for (var image in _images) {
-          request.files.add(await http.MultipartFile.fromPath('images', image.path!));
-        }
-        
-        var response = await request.send();
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Apartment listed, complete payment')));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Listing failed')));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  Future<void> _browseApartments() async {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => ListingsPage(token: widget.token, type: 'apartments')));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Beba Apartments')),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Card(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  TextFormField(controller: _locationController, decoration: InputDecoration(labelText: 'Location'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _sizeController, decoration: InputDecoration(labelText: 'Size (e.g., 2 Bedrooms)'), validator: (v) => v!.isEmpty ? 'Required' : null),
-                  TextFormField(controller: _priceController, decoration: InputDecoration(labelText: 'Price'), keyboardType: TextInputType.number, validator: (v) => v!.isEmpty ? 'Required' : null),
-                  ElevatedButton(onPressed: () async => _images = (await FilePicker.platform.pickFiles(allowMultiple: true))!.files, child: Text('Upload Images')),
-                  ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => MapPicker(onSelect: (pos) => _location = pos))), child: Text('Pin Location')),
+                  Text('My Rentals:', style: Theme.of(context).textTheme.headline6),
+                  SizedBox(height: 5),
+                  ...rentals.map((r) => Card(
+                        child: ListTile(
+                          title: Text(r['details']),
+                          subtitle: Text('${r['location']} - Ksh ${r['price']} | Created: ${r['created_at']}'),
+                        ),
+                      )),
                   SizedBox(height: 20),
-                  ElevatedButton(onPressed: _listApartment, child: Text('List Apartment (Ksh 100)'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
+                  ElevatedButton(onPressed: () => _addListing('Shamba'), child: Text('Add Shamba Listing (Ksh 100)')),
                   SizedBox(height: 10),
-                  ElevatedButton(onPressed: _browseApartments, child: Text('Browse Apartments'), style: ElevatedButton.styleFrom(minimumSize: Size(double.infinity, 50))),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class MapPicker extends StatefulWidget {
-  final Function(LatLng) onSelect;
-  MapPicker({required this.onSelect});
-
-  @override
-  _MapPickerState createState() => _MapPickerState();
-}
-
-class _MapPickerState extends State<MapPicker> {
-  LatLng? _pickedLocation;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Pick Location')),
-      body: GoogleMap(
-        initialCameraPosition: CameraPosition(target: LatLng(-1.2921, 36.8219), zoom: 12),
-        onTap: (pos) => setState(() => _pickedLocation = pos),
-        markers: _pickedLocation != null ? {Marker(markerId: MarkerId('picked'), position: _pickedLocation!)} : {},
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          if (_pickedLocation != null) {
-            widget.onSelect(_pickedLocation!);
-            Navigator.pop(context);
-          }
-        },
-        child: Icon(Icons.check),
-      ),
-    );
-  }
-}
-
-class ListingsPage extends StatelessWidget {
-  final String token;
-  final String type;
-  ListingsPage({required this.token, required this.type});
-
-  Future<List<dynamic>> _fetchListings() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/listings/$type'), headers: {'Authorization': 'Bearer $token'});
-    return json.decode(response.body);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Browse $type')),
-      body: FutureBuilder<List<dynamic>>(
-        future: _fetchListings(),
-        builder: (context, snapshot) {
-          if (snapshot.hasData) {
-            return ListView.builder(
-              itemCount: snapshot.data!.length,
-              itemBuilder: (context, index) {
-                var listing = snapshot.data![index];
-                return Card(
-                  child: ListTile(
-                    title: Text(type == 'vehicles' ? '${listing['vehicle_type']} - ${listing['vehicle_reg']}' : type == 'shamba' ? '${listing['size']} acres - ${listing['location']}' : '${listing['location']} - ${listing[type == 'rentals' ? 'house_type' : 'size']}'),
-                    subtitle: Text('Ksh ${listing['price'] ?? 'N/A'}'),
-                    trailing: type == 'vehicles'
-                        ? ElevatedButton(
-                            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => BookingForm(token: token, vehicleId: listing['id']))),
-                            child: Text('Book'))
-                        : IconButton(
-                            icon: Icon(Icons.image),
-                            onPressed: () => showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                content: SingleChildScrollView(
-                                  child: Column(children: (listing['images'] as List).map((url) => Image.network(url)).toList()),
-                                ),
-                              ),
-                            ),
+                  Text('My Shamba:', style: Theme.of(context).textTheme.headline6),
+                  SizedBox(height: 5),
+                  ...shamba.map((s) => Card(
+                        child: ListTile(
+                          title: Text(s['details']),
+                          subtitle: Text('${s['location']} - Ksh ${s['price']} | Created: ${s['created_at']}'),
+                        ),
+                      )),
+                  SizedBox(height: 20),
+                  ElevatedButton(onPressed: () => _addListing('Apartments'), child: Text('Add Apartment Listing (Ksh 100)')),
+                  SizedBox(height: 10),
+                  Text('My Apartments:', style: Theme.of(context).textTheme.headline6),
+                  SizedBox(height: 5),
+                  ...apartments.map((a) => Card(
+                        child: ListTile(
+                          title: Text(a['details']),
+                          subtitle: Text('${a['location']} - Ksh ${a['price']} | Created: ${a['created_at']}'),
+                        ),
+                      )),
+                  SizedBox(height: 20),
+                  ElevatedButton(onPressed: _addInsurance, child: Text('Add Insurance (Free)')),
+                  SizedBox(height: 20),
+                  ElevatedButton(onPressed: _addTransportJob, child: Text('Post Transport Job (Ksh 100)')),
+                  SizedBox(height: 10),
+                  if (widget.isDriver) ...[
+                    ElevatedButton(onPressed: _searchTransportJobs, child: Text('Search Transport Jobs')),
+                    SizedBox(height: 10),
+                    Text('Available Transport Jobs:', style: Theme.of(context).textTheme.headline6),
+                    SizedBox(height: 5),
+                    ...transportJobs.map((j) => Card(
+                          child: ListTile(
+                            title: Text('${j['pickup_location']} to ${j['destination']}'),
+                            subtitle: Text('Description: ${j['description']} | Budget: Ksh ${j['budget']} | Posted: ${j['timestamp']}'),
                           ),
-                  ),
-                );
-              },
-            );
-          }
-          return Center(child: CircularProgressIndicator());
-        },
-      ),
-    );
-  }
-}
-
-class MyListingsPage extends StatefulWidget {
-  final String token;
-  MyListingsPage({required this.token});
-
-  @override
-  _MyListingsPageState createState() => _MyListingsPageState();
-}
-
-class _MyListingsPageState extends State<MyListingsPage> {
-  Future<List<dynamic>> _fetchVehicles() async {
-    final response = await http.get(Uri.parse('https://yourdomain.com/vehicles'), headers: {'Authorization': 'Bearer ${widget.token}'});
-    return json.decode(response.body);
-  }
-
-  Future<void> _removeVehicle(int vehicleId) async {
-    final response = await http.delete(Uri.parse('https://yourdomain.com/vehicles/$vehicleId'), headers: {'Authorization': 'Bearer ${widget.token}'});
-    if (response.statusCode == 200) {
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Vehicle removed')));
-    }
-  }
-
-  Future<void> _removeListing(String type, int id) async {
-    final response = await http.delete(Uri.parse('https://yourdomain.com/$type/$id'), headers: {'Authorization': 'Bearer ${widget.token}'});
-    if (response.statusCode == 200) {
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$type removed')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('My Listings')),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            FutureBuilder<List<dynamic>>(
-              future: _fetchVehicles(),
-              builder: (context, snapshot) {
-                if (snapshot.hasData) {
-                  return Card(
-                    margin: EdgeInsets.all(16),
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('My Vehicles', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          ...snapshot.data!.map((vehicle) => ListTile(
-                                title: Text('${vehicle['vehicle_type']} - ${vehicle['vehicle_reg']}'),
-                                subtitle: Text('Status: ${vehicle['status']}'),
-                                trailing: IconButton(
-                                  icon: Icon(Icons.delete),
-                                  onPressed: () => _removeVehicle(vehicle['id']),
-                                ),
-                              )),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-                return CircularProgressIndicator();
-              },
+                        )),
+                  ],
+                  SizedBox(height: 20),
+                  Text('Available Vehicles:', style: Theme.of(context).textTheme.headline6),
+                  SizedBox(height: 5),
+                  ...availableVehicles.map((v) => Card(
+                        child: ListTile(
+                          title: Text('${v['vehicle_type']} - ${v['vehicle_reg']}'),
+                          subtitle: Text('Tons: ${v['tons'] ?? 'N/A'}'),
+                          trailing: ElevatedButton(
+                            onPressed: () => _bookVehicle(v['id']),
+                            child: Text('Book (Ksh 100)'),
+                          ),
+                        ),
+                      )),
+                ],
+              ),
             ),
-            // Add similar sections for rentals, shamba, apartments if needed
-          ],
-        ),
-      ),
     );
   }
 }
