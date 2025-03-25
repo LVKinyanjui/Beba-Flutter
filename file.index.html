@@ -4,60 +4,221 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Beba - Ride With Confidence</title>
-    <!-- Favicon (place favicon.ico in web/ directory) -->
-    <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <!-- Basic styling for web app -->
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-            background-color: #f8f9fa;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-        }
-        #app-container {
-            width: 100%;
-            height: 100%;
-            max-width: 800px; /* Adjust for desired app width */
-            max-height: 600px; /* Adjust for desired app height */
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 18px;
-            color: #007bff;
-        }
-    </style>
-    <!-- Flutter web bootstrap script -->
-    <script>
-        window.addEventListener('load', function(ev) {
-            _flutter.loader.loadEntrypoint({
-                serviceWorker: {
-                    serviceWorkerVersion: "1",
-                },
-                onEntrypointLoaded: function(engineInitializer) {
-                    engineInitializer.initializeEngine().then(function(appRunner) {
-                        appRunner.runApp();
-                    });
-                }
-            });
-        });
-    </script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="loading">Loading Beba...</div>
-    <div id="app-container"></div>
-    <!-- Flutter web main script (generated during build) -->
-    <script src="main.dart.js" type="application/javascript"></script>
+    <header class="bg-primary text-white text-center py-4">
+        <h1>Beba</h1>
+        <p>Ride With Confidence</p>
+    </header>
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('home')">Home</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('vehicles')">Vehicles</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('transport-jobs')">Transport Jobs</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('listings')">Listings</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('insurance')">Insurance</a></li>
+                </ul>
+                <div id="auth-nav">
+                    <button class="btn btn-primary me-2" onclick="showLogin()">Login</button>
+                    <button class="btn btn-outline-primary" onclick="showSignup()">Sign Up</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container my-5">
+        <!-- Home Section -->
+        <section id="home-section">
+            <div class="row">
+                <div class="col-md-6">
+                    <h2>Welcome to Beba</h2>
+                    <p>Book vehicles, post transport jobs, list rentals, shamba, or apartments—all with secure M-Pesa payments of Ksh 100 per transaction (except vehicle listing and insurance, which are free).</p>
+                </div>
+                <div class="col-md-6">
+                    <div id="login-form" class="card p-4" style="display: none;">
+                        <h3>Login</h3>
+                        <form onsubmit="login(event)">
+                            <div class="mb-3">
+                                <input type="email" class="form-control" id="login-email" placeholder="Email" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="password" class="form-control" id="login-password" placeholder="Password" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Login</button>
+                        </form>
+                    </div>
+                    <div id="signup-form" class="card p-4" style="display: none;">
+                        <h3>Sign Up</h3>
+                        <form onsubmit="signup(event)">
+                            <div class="mb-3">
+                                <input type="text" class="form-control" id="signup-fullname" placeholder="Full Name" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="text" class="form-control" id="signup-phone" placeholder="Phone Number (e.g., 2547XXXXXXXX)" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="text" class="form-control" id="signup-id" placeholder="ID Number" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="text" class="form-control" id="signup-kra" placeholder="KRA PIN" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="email" class="form-control" id="signup-email" placeholder="Email" required>
+                            </div>
+                            <div class="mb-3">
+                                <input type="password" class="form-control" id="signup-password" placeholder="Password" required>
+                            </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="signup-is-driver">
+                                <label class="form-check-label" for="signup-is-driver">Register as Driver</label>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Sign Up</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Vehicles Section -->
+        <section id="vehicles-section" style="display: none;">
+            <h2>Vehicles</h2>
+            <button class="btn btn-primary mb-3" onclick="showAddVehicleForm()">Add Vehicle (Free)</button>
+            <div id="add-vehicle-form" class="card p-4 mb-3" style="display: none;">
+                <h3>Add Vehicle</h3>
+                <form onsubmit="addVehicle(event)">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="vehicle-reg" placeholder="Vehicle Registration" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="vehicle-type" placeholder="Vehicle Type" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="number" class="form-control" id="vehicle-tons" placeholder="Tons">
+                    </div>
+                    <div class="mb-3">
+                        <input type="file" class="form-control" id="vehicle-image" accept="image/*">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Add Vehicle (Free)</button>
+                </form>
+            </div>
+            <h3>My Vehicles</h3>
+            <div id="my-vehicles" class="row"></div>
+            <h3>Available Vehicles (Book for Ksh 100)</h3>
+            <div id="available-vehicles" class="row"></div>
+        </section>
+
+        <!-- Transport Jobs Section -->
+        <section id="transport-jobs-section" style="display: none;">
+            <h2>Transport Jobs</h2>
+            <button class="btn btn-primary mb-3" onclick="showAddTransportJobForm()">Post Transport Job (Ksh 100)</button>
+            <div id="add-transport-job-form" class="card p-4 mb-3" style="display: none;">
+                <h3>Post Transport Job</h3>
+                <p>You will be prompted to pay Ksh 100 via M-Pesa.</p>
+                <form onsubmit="addTransportJob(event)">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="job-pickup" placeholder="Pickup Location" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="job-destination" placeholder="Destination" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="job-description" placeholder="Description" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="number" class="form-control" id="job-budget" placeholder="Budget" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Initiate Payment (Ksh 100)</button>
+                </form>
+            </div>
+            <h3>Search Available Transport Jobs</h3>
+            <form onsubmit="searchTransportJobs(event)" class="mb-3">
+                <div class="row">
+                    <div class="col-md-5">
+                        <input type="text" class="form-control" id="search-pickup" placeholder="Pickup Location">
+                    </div>
+                    <div class="col-md-5">
+                        <input type="text" class="form-control" id="search-destination" placeholder="Destination">
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary w-100">Search</button>
+                    </div>
+                </div>
+            </form>
+            <div id="transport-jobs" class="row"></div>
+        </section>
+
+        <!-- Listings Section -->
+        <section id="listings-section" style="display: none;">
+            <h2>Listings</h2>
+            <div class="row mb-3">
+                <div class="col-md-4"><button class="btn btn-primary w-100" onclick="showAddListingForm('rentals')">Add Rental (Ksh 100)</button></div>
+                <div class="col-md-4"><button class="btn btn-primary w-100" onclick="showAddListingForm('shamba')">Add Shamba (Ksh 100)</button></div>
+                <div class="col-md-4"><button class="btn btn-primary w-100" onclick="showAddListingForm('apartments')">Add Apartment (Ksh 100)</button></div>
+            </div>
+            <div id="add-listing-form" class="card p-4 mb-3" style="display: none;">
+                <h3 id="listing-form-title"></h3>
+                <p>You will be prompted to pay Ksh 100 via M-Pesa.</p>
+                <form onsubmit="addListing(event)">
+                    <input type="hidden" id="listing-type">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="listing-location" placeholder="Location" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="listing-details" placeholder="Details (e.g., House Type or Land Size)" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="number" class="form-control" id="listing-price" placeholder="Price" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="file" class="form-control" id="listing-images" accept="image/*" multiple>
+                    </div>
+                    <div class="mb-3" id="shamba-title-deed" style="display: none;">
+                        <input type="file" class="form-control" id="listing-title-deed" accept=".pdf" placeholder="Title Deed (PDF)">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Initiate Payment (Ksh 100)</button>
+                </form>
+            </div>
+            <h3>My Listings</h3>
+            <div id="my-listings" class="row"></div>
+        </section>
+
+        <!-- Insurance Section -->
+        <section id="insurance-section" style="display: none;">
+            <h2>Insurance</h2>
+            <button class="btn btn-primary mb-3" onclick="showAddInsuranceForm()">Add Insurance (Free)</button>
+            <div id="add-insurance-form" class="card p-4 mb-3" style="display: none;">
+                <h3>Add Insurance</h3>
+                <form onsubmit="addInsurance(event)">
+                    <div class="mb-3">
+                        <input type="number" class="form-control" id="insurance-vehicle-id" placeholder="Vehicle ID" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="insurance-policy" placeholder="Policy Number" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="date" class="form-control" id="insurance-expiry" placeholder="Expiry Date" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Add Insurance (Free)</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bg-dark text-white text-center py-3">
+        <p>© 2025 Beba. All rights reserved.</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <script src="scripts.js"></script>
 </body>
 </html>
-
