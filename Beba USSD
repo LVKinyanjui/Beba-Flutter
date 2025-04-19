@@ -1,0 +1,456 @@
+from flask import Flask, request, jsonify
+import sqlite3
+import re
+from datetime import datetime
+import requests
+import base64
+import time
+
+app = Flask(__name__)
+
+# Daraja API credentials (replace with your own)
+MPESA_CONSUMER_KEY = "your_consumer_key"
+MPESA_CONSUMER_SECRET = "your_consumer_secret"
+MPESA_SHORTCODE = "your_shortcode"  # e.g., 123456
+MPESA_PASSKEY = "your_passkey"
+MPESA_CALLBACK_URL = "https://yourapp.com/mpesa_callback"
+
+# Database connection
+def get_db():
+    conn = sqlite3.connect('beba.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Initialize database tables
+def init_db():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            phone TEXT PRIMARY KEY, name TEXT, id_number TEXT, kra_pin TEXT, 
+            email TEXT, pin TEXT, verified INTEGER DEFAULT 0)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, category TEXT, 
+            pickup TEXT, destination TEXT, status TEXT, driver_phone TEXT, 
+            payment_status TEXT, amount INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS insurance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, booking_id INTEGER, 
+            policy_type TEXT, status TEXT, quote TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sender_phone TEXT, recipient_phone TEXT, 
+            message TEXT, timestamp TEXT, direction TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS drivers (
+            phone TEXT PRIMARY KEY, name TEXT, vehicle_type TEXT, status TEXT, 
+            license TEXT, rating REAL DEFAULT 0.0)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, pickup TEXT, 
+            destination TEXT, budget INTEGER, status TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id INTEGER, user_phone TEXT, 
+            driver_phone TEXT, rating INTEGER, comment TEXT)''')
+        conn.commit()
+
+# MPesa STK Push
+def get_mpesa_access_token():
+    api_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
+    auth = base64.b64encode(f"{MPESA_CONSUMER_KEY}:{MPESA_CONSUMER_SECRET}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    response = requests.get(api_url, headers=headers)
+    return response.json().get("access_token")
+
+def initiate_stk_push(phone, amount):
+    access_token = get_mpesa_access_token()
+    if not access_token:
+        return {"status": "failed", "error": "Could not get access token"}
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(f"{MPESA_SHORTCODE}{MPESA_PASSKEY}{timestamp}".encode()).decode()
+    api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    payload = {
+        "BusinessShortCode": MPESA_SHORTCODE,
+        "Password": password,
+        "Timestamp": timestamp,
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": amount,
+        "PartyA": phone.replace("+254", ""),  # e.g., 712345678
+        "PartyB": MPESA_SHORTCODE,
+        "PhoneNumber": phone.replace("+254", ""),
+        "CallBackURL": MPESA_CALLBACK_URL,
+        "AccountReference": "BebaBooking",
+        "TransactionDesc": "Beba Vehicle Booking"
+    }
+    response = requests.post(api_url, json=payload, headers=headers)
+    result = response.json()
+    if result.get("ResponseCode") == "0":
+        return {"status": "success", "checkout_request_id": result.get("CheckoutRequestID")}
+    return {"status": "failed", "error": result.get("errorMessage", "Unknown error")}
+
+# MPesa callback (store payment status)
+@app.route('/mpesa_callback', methods=['POST'])
+def mpesa_callback():
+    data = request.get_json()
+    checkout_request_id = data.get("Body", {}).get("stkCallback", {}).get("CheckoutRequestID")
+    result_code = data.get("Body", {}).get("stkCallback", {}).get("ResultCode")
+    if checkout_request_id and result_code == 0:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE bookings SET payment_status = ? WHERE payment_status = ?",
+                      ("Paid", checkout_request_id))
+            conn.commit()
+    return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"})
+
+# Validation functions
+def is_valid_phone(phone):
+    return bool(re.match(r'^\+2547\d{8}$', phone))
+
+def is_valid_id(id_number):
+    return bool(re.match(r'^\d{8}$', id_number))
+
+def is_valid_kra(kra_pin):
+    return bool(re.match(r'^[A-Z]\d{9}[A-Z]$', kra_pin))
+
+def is_valid_email(email):
+    return bool(re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email))
+
+def is_valid_pin(pin):
+    return bool(re.match(r'^\d{4}$', pin))
+
+@app.route('/ussd', methods=['POST'])
+def ussd():
+    session_id = request.form.get('sessionId')
+    phone_number = request.form.get('phoneNumber')
+    text = request.form.get('text', '')
+
+    if not is_valid_phone(phone_number):
+        return jsonify({"sessionId": session_id, "phoneNumber": phone_number, 
+                        "text": "END Invalid phone number (+2547XXXXXXXX)."})
+
+    response = ""
+    parts = text.split('*') if text else []
+
+    # Main menu
+    if text == "":
+        response = ("CON Welcome to Beba - Ride With Confidence\n"
+                    "1. Register\n2. Book Vehicle\n3. Check Booking\n"
+                    "4. Insurance\n5. Chat\n6. Post Job\n7. Rate Driver\n0. Exit")
+
+    # Registration flow
+    elif text == "1":
+        response = "CON Enter Full Name"
+    elif parts[0] == "1" and len(parts) == 2:
+        response = "CON Enter 8-digit Kenyan ID Number"
+    elif parts[0] == "1" and len(parts) == 3:
+        if is_valid_id(parts[2]):
+            response = "CON Enter KRA PIN (e.g., A123456789Z)"
+        else:
+            response = "CON Invalid ID format. Enter 8-digit Kenyan ID Number"
+    elif parts[0] == "1" and len(parts) == 4:
+        if is_valid_kra(parts[3]):
+            response = "CON Enter Email Address"
+        else:
+            response = "CON Invalid KRA PIN format. Enter KRA PIN (e.g., A123456789Z)"
+    elif parts[0] == "1" and len(parts) == 5:
+        if is_valid_email(parts[4]):
+            response = "CON Enter 4-digit PIN"
+        else:
+            response = "CON Invalid email. Enter Email Address"
+    elif parts[0] == "1" and len(parts) == 6:
+        if is_valid_pin(parts[5]):
+            with get_db() as conn:
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO users (phone, name, id_number, kra_pin, email, pin, verified) "
+                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                          (phone_number, parts[1], parts[2], parts[3], parts[4], parts[5], 1))
+                conn.commit()
+            response = "END Registration successful! Dial *123# to continue."
+        else:
+            response = "CON Invalid PIN format. Enter 4-digit PIN"
+
+    # Booking flow
+    elif text == "2":
+        response = ("CON Select Vehicle Category\n1. Lorries\n2. Vans\n3. Car Rentals\n"
+                    "4. Tow Trucks\n5. Water Trucks\n6. Transit Goods\n7. Multipurpose Trucks\n0. Back")
+    elif parts[0] == "2" and len(parts) == 2:
+        categories = {"1": "Lorries", "2": "Vans", "3": "Car Rentals", "4": "Tow Trucks", 
+                      "5": "Water Trucks", "6": "Transit Goods", "7": "Multipurpose Trucks"}
+        if parts[1] in categories:
+            response = "CON Enter Pick-up Point"
+        else:
+            response = "END Invalid category. Try again."
+    elif parts[0] == "2" and len(parts) == 3:
+        response = "CON Enter Destination"
+    elif parts[0] == "2" and len(parts) == 4:
+        response = "CON Confirm Booking (Ksh 100 via MPesa)\n1. Pay\n2. Cancel"
+    elif parts[0] == "2" and len(parts) == 5 and parts[4] == "1":
+        category = {"1": "Lorries", "2": "Vans", "3": "Car Rentals", "4": "Tow Trucks", 
+                    "5": "Water Trucks", "6": "Transit Goods", "7": "Multipurpose Trucks"}[parts[1]]
+        pickup, destination = parts[2], parts[3]
+        payment = initiate_stk_push(phone_number, 100)
+        if payment["status"] == "success":
+            with get_db() as conn:
+                c = conn.cursor()
+                c.execute("SELECT phone FROM drivers WHERE vehicle_type = ? AND status = ? LIMIT 1", 
+                          (category, "available"))
+                driver = c.fetchone()
+                driver_phone = driver["phone"] if driver else None
+                c.execute("INSERT INTO bookings (phone, category, pickup, destination, status, driver_phone, payment_status, amount) "
+                          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                          (phone_number, category, pickup, destination, "Pending", driver_phone, payment["checkout_request_id"], 100))
+                conn.commit()
+                if driver_phone:
+                    c.execute("UPDATE drivers SET status = ? WHERE phone = ?", ("booked", driver_phone))
+                    conn.commit()
+            response = f"END Booking requested! Check MPesa to pay Ksh 100. Driver: {'Assigned' if driver_phone else 'Pending'}"
+        else:
+            response = f"END Payment failed: {payment.get('error', 'Try again.')}"
+    elif parts[0] == "2" and len(parts) == 5 and parts[4] == "2":
+        response = "END Booking cancelled."
+
+    # Check booking
+    elif text == "3":
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT category, pickup, destination, status, driver_phone, payment_status FROM bookings "
+                      "WHERE phone = ? LIMIT 1", (phone_number,))
+            booking = c.fetchone()
+        if booking:
+            driver_info = f"Driver: {booking['driver_phone'] or 'Not assigned'}"
+            response = (f"END Latest Booking:\nCategory: {booking['category']}\nPickup: {booking['pickup']}\n"
+                       f"Destination: {booking['destination']}\nStatus: {booking['status']}\n"
+                       f"Payment: {booking['payment_status']}\n{driver_info}")
+        else:
+            response = "END No bookings found."
+
+    # Insurance flow
+    elif text == "4":
+        response = "CON Insurance Options\n1. Request Quote\n2. View Policies\n0. Back"
+    elif parts[0] == "4" and parts[1] == "1":
+        response = "CON Select Policy Type\n1. Vehicle Insurance\n2. Cargo Insurance\n3. Personal Insurance"
+    elif parts[0] == "4" and len(parts) == 3 and parts[1] == "1":
+        policy_types = {"1": "Vehicle Insurance", "2": "Cargo Insurance", "3": "Personal Insurance"}
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id FROM bookings WHERE phone = ? AND status = ? LIMIT 1", (phone_number, "Confirmed"))
+            booking = c.fetchone()
+            booking_id = booking["id"] if booking else None
+            c.execute("INSERT INTO insurance (phone, booking_id, policy_type, status, quote) VALUES (?, ?, ?, ?, ?)",
+                      (phone_number, booking_id, policy_types[parts[2]], "Pending", "Ksh 5000 (estimated)"))
+            conn.commit()
+        response = f"END Quote requested for {policy_types[parts[2]]}. Check policies later."
+    elif parts[0] == "4" and parts[1] == "2":
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT policy_type, status, quote FROM insurance WHERE phone = ? LIMIT 1", (phone_number,))
+            policy = c.fetchone()
+        if policy:
+            response = f"END Policy:\nType: {policy['policy_type']}\nStatus: {policy['status']}\nQuote: {policy['quote']}"
+        else:
+            response = "END No policies found."
+    elif parts[0] == "4" and parts[1] == "0":
+        response = ("CON Welcome to Beba - Ride With Confidence\n"
+                    "1. Register\n2. Book Vehicle\n3. Check Booking\n"
+                    "4. Insurance\n5. Chat\n6. Post Job\n7. Rate Driver\n0. Exit")
+
+    # Enhanced chat flow
+    elif text == "5":
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT driver_phone, payment_status FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                      (phone_number, "Confirmed"))
+            booking = c.fetchone()
+        if booking and booking["payment_status"] == "Paid":
+            options = ["1. Message Driver", "2. Contact Support", "3. View Messages", "0. Back"]
+            if booking["driver_phone"]:
+                response = f"CON Chat Options\n{options[0]} ({booking['driver_phone']})\n{options[1]}\n{options[2]}\n{options[3]}"
+            else:
+                response = f"CON Chat Options\n{options[1]}\n{options[2]}\n{options[3]}"
+        else:
+            response = "END Complete a paid booking to chat."
+    elif parts[0] == "5" and parts[1] == "1" and len(parts) == 2:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT driver_phone FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                      (phone_number, "Confirmed"))
+            booking = c.fetchone()
+        if booking and booking["driver_phone"]:
+            response = ("CON Send to Driver\n1. What's ETA?\n2. Confirm pickup\n3. Change destination\n"
+                        "4. Other (type message)\n0. Cancel")
+        else:
+            response = "END No driver assigned."
+    elif parts[0] == "5" and parts[1] == "1" and len(parts) == 3:
+        predefined = {"1": "What's ETA?", "2": "Confirm pickup", "3": "Change destination"}
+        if parts[2] in predefined:
+            message = predefined[parts[2]]
+            with get_db() as conn:
+                c = conn.cursor()
+                c.execute("SELECT driver_phone FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                          (phone_number, "Confirmed"))
+                booking = c.fetchone()
+                if booking:
+                    c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                              "VALUES (?, ?, ?, ?, ?)",
+                              (phone_number, booking["driver_phone"], message, datetime.now().isoformat(), "out"))
+                    # Simulate driver reply
+                    reply = "ETA: 10 mins" if parts[2] == "1" else "Pickup confirmed" if parts[2] == "2" else "Send new destination"
+                    c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                              "VALUES (?, ?, ?, ?, ?)",
+                              (booking["driver_phone"], phone_number, reply, datetime.now().isoformat(), "in"))
+                    conn.commit()
+            response = f"END Sent: {message}\nReply: {reply}"
+        elif parts[2] == "4":
+            response = "CON Enter Message (max 50 chars)"
+        elif parts[2] == "0":
+            response = "END Chat cancelled."
+        else:
+            response = "END Invalid option."
+    elif parts[0] == "5" and parts[1] == "1" and len(parts) == 4:
+        message = parts[3][:50]
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT driver_phone FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                      (phone_number, "Confirmed"))
+            booking = c.fetchone()
+            if booking:
+                c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (phone_number, booking["driver_phone"], message, datetime.now().isoformat(), "out"))
+                # Simulate reply
+                c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (booking["driver_phone"], phone_number, "Received your message!", datetime.now().isoformat(), "in"))
+                conn.commit()
+            response = f"END Message sent: {message}\nReply: Received your message!"
+    elif parts[0] == "5" and parts[1] == "2":
+        response = ("CON Send to Support\n1. Report issue\n2. Request refund\n3. General query\n"
+                    "4. Other (type message)\n0. Cancel")
+    elif parts[0] == "5" and len(parts) == 3 and parts[1] == "2":
+        predefined = {"1": "Report issue", "2": "Request refund", "3": "General query"}
+        if parts[2] in predefined:
+            message = predefined[parts[2]]
+            with get_db() as conn:
+                c = conn.cursor()
+                c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (phone_number, "+254700000000", message, datetime.now().isoformat(), "out"))
+                reply = "Support will respond soon."
+                c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          ("+254700000000", phone_number, reply, datetime.now().isoformat(), "in"))
+                conn.commit()
+            response = f"END Sent: {message}\nReply: {reply}"
+        elif parts[2] == "4":
+            response = "CON Enter Message (max 50 chars)"
+        elif parts[2] == "0":
+            response = "END Chat cancelled."
+        else:
+            response = "END Invalid option."
+    elif parts[0] == "5" and len(parts) == 4 and parts[1] == "2":
+        message = parts[3][:50]
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                      "VALUES (?, ?, ?, ?, ?)",
+                      (phone_number, "+254700000000", message, datetime.now().isoformat(), "out"))
+            reply = "Support will respond soon."
+            c.execute("INSERT INTO messages (sender_phone, recipient_phone, message, timestamp, direction) "
+                      "VALUES (?, ?, ?, ?, ?)",
+                      ("+254700000000", phone_number, reply, datetime.now().isoformat(), "in"))
+            conn.commit()
+        response = f"END Message sent: {message}\nReply: {reply}"
+    elif parts[0] == "5" and parts[1] == "3":
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT message, sender_phone, timestamp FROM messages WHERE recipient_phone = ? "
+                      "AND direction = 'in' ORDER BY timestamp DESC LIMIT 3", (phone_number,))
+            messages = c.fetchall()
+        if messages:
+            msg_text = "\n".join([f"From {m['sender_phone'][-4:]}: {m['message']} ({m['timestamp'][:10]})" 
+                                  for m in messages])
+            response = f"END Recent Messages:\n{msg_text}"
+        else:
+            response = "END No messages found."
+    elif parts[0] == "5" and parts[1] == "0":
+        response = ("CON Welcome to Beba - Ride With Confidence\n"
+                    "1. Register\n2. Book Vehicle\n3. Check Booking\n"
+                    "4. Insurance\n5. Chat\n6. Post Job\n7. Rate Driver\n0. Exit")
+
+    # Post job flow
+    elif text == "6":
+        response = "CON Post Transport Job\nEnter Pick-up Point"
+    elif parts[0] == "6" and len(parts) == 2:
+        response = "CON Enter Destination"
+    elif parts[0] == "6" and len(parts) == 3:
+        response = "CON Enter Budget (Ksh)"
+    elif parts[0] == "6" and len(parts) == 4:
+        try:
+            budget = int(parts[3])
+            if budget > 0:
+                payment = initiate_stk_push(phone_number, 100)
+                if payment["status"] == "success":
+                    with get_db() as conn:
+                        c = conn.cursor()
+                        c.execute("INSERT INTO jobs (phone, pickup, destination, budget, status) "
+                                  "VALUES (?, ?, ?, ?, ?)",
+                                  (phone_number, parts[1], parts[2], budget, "Posted"))
+                        conn.commit()
+                    response = "END Job posted! Check MPesa to pay Ksh 100."
+                else:
+                    response = f"END Payment failed: {payment.get('error', 'Try again.')}"
+            else:
+                response = "CON Invalid budget. Enter Budget (Ksh)"
+        except ValueError:
+            response = "CON Invalid budget. Enter Budget (Ksh)"
+
+    # Rate driver
+    elif text == "7":
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, driver_phone FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                      (phone_number, "Confirmed"))
+            booking = c.fetchone()
+        if booking and booking["driver_phone"]:
+            response = "CON Rate Driver (1-5)\n1. Poor\n2. Fair\n3. Good\n4. Very Good\n5. Excellent"
+        else:
+            response = "END No completed booking to rate."
+    elif parts[0] == "7" and len(parts) == 2:
+        try:
+            rating = int(parts[1])
+            if 1 <= rating <= 5:
+                response = "CON Enter Comment (max 50 chars)"
+            else:
+                response = "CON Invalid rating. Enter 1-5."
+        except ValueError:
+            response = "CON Invalid rating. Enter 1-5."
+    elif parts[0] == "7" and len(parts) == 3:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, driver_phone FROM bookings WHERE phone = ? AND status = ? LIMIT 1", 
+                      (phone_number, "Confirmed"))
+            booking = c.fetchone()
+            if booking:
+                c.execute("INSERT INTO ratings (booking_id, user_phone, driver_phone, rating, comment) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          (booking["id"], phone_number, booking["driver_phone"], int(parts[1]), parts[2][:50]))
+                c.execute("SELECT AVG(rating) as avg_rating FROM ratings WHERE driver_phone = ?", 
+                          (booking["driver_phone"],))
+                avg_rating = c.fetchone()["avg_rating"]
+                c.execute("UPDATE drivers SET rating = ? WHERE phone = ?", 
+                          (avg_rating, booking["driver_phone"]))
+                conn.commit()
+            response = "END Rating submitted! Ride With Confidence."
+        else:
+            response = "END No booking to rate."
+
+    # Exit
+    elif text == "0":
+        response = "END Thank you for using Beba! Ride With Confidence."
+
+    # Handle invalid input
+    else:
+        response = "END Invalid input. Dial *123# to start again."
+
+    return jsonify({"sessionId": session_id, "phoneNumber": phone_number, "text": response})
+
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True, port=5000)
